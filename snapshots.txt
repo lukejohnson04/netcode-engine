@@ -1,0 +1,6 @@
+server saves snapshots every other tick
+server sends previous second worth of snapshots every other tick
+server sends previous second of commands every tick
+server removes duplicates in unprocessed commands
+server merges unprocessed commands
+server loads first snapshot before first unprocessed command, and updates the game state to the present from that point

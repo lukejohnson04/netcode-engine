@@ -1,0 +1,47 @@
+TAB          Cycles through completions for a word.
+
+ALT-B        Load buffer to current window
+ALT-SHIFT-B  Switch to buffer in current window
+
+ALT-F        Load file in the current window
+ALT-SHIFT-F  Load file in the other window
+
+ALT-S        Save the file in the current window
+ALT-M        Looks for and executes a build.bat
+ALT-R        Revert buffer.
+
+ALT-W        Switch to other window
+
+ALT-C        Switch between.h file and .cpp file in current window
+ALT-SHIFT-C  Switch between .h file and .cpp file in the other window
+
+ALT-K        Kills a buffer (asks to save first if modified)
+
+CTRL-Arrows  Move cursor by larger increments (word, whitespace)
+CTRL-SPACE   Sets the mark
+CTRL-TAB     Reindent block.
+CTRL-Q       Copies the block.
+CTRL-F       Pastes the block.
+CTRL-W       Cuts the block.
+ALT-SHIFT-;  Pops back to previous mark
+
+ALT-U        Undo
+
+Alt-J        Jump to a function by name
+CTRL-S       Start incremental search
+  CTRL-S     Moves to next occurance
+  CTRL-R     Moves to previous occurance
+
+ALT-O        Query replace
+ALT-L        Replace inside a block
+
+ALT-[        Begin recording keyboard macro
+ALT-]        End recording keyboard macro
+ALT-'        Replay keyboard macro
+
+ALT-.        Reflow a comment
+
+ALT-N        Go to the next error after a compile
+ALT-SHIFT-N  Go to the previous error after a compile
+
+ALT-G        Goto line number
