@@ -3,22 +3,15 @@
 
 struct server_client_t {
     sockaddr_in addr;
-    int connection_time;
+    i64 connection_time;
     int ping;
 };
-
-struct server_header_t {
-    int command_sliding_window_len = 1000;
-    int tickrate=40;
-    int snaprate=20;
-};
-
 
 struct server_t {
     sockaddr_in clients[MAX_CLIENTS];
     u32 client_count=0;
     int socket=-1;
-    i64 time;
+    double time;
 
     server_client_t s_clients[MAX_CLIENTS];
 
@@ -26,6 +19,7 @@ struct server_t {
     // gonna need an interesting data structure for this
     netstate_info_t NetState;
     server_header_t header;
+    timer_t timer;
 };
 
 global_variable server_t gl_server;
@@ -60,21 +54,29 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             packet_t res = {};
             res.type = CONNECTION_ACCEPTED;
             res.data.connection_dump.id = gl_server.client_count;
-            res.data.connection_dump.server_time = SDL_GetTicks();
-            
-            add_player();
+            res.data.connection_dump.server_time = gl_server.timer.get();
+            res.data.connection_dump.server_header = gl_server.header;
             
             send_packet(connect_socket,&clientaddr,&res);
 
             packet_t gs_full_info = {};
             gs_full_info.type = GS_FULL_INFO;
-            gs_full_info.data.count = gl_server.client_count;
+            gs_full_info.data.full_info_dump = {};
+            gs_full_info.data.full_info_dump.p_count=gs.player_count;
 
+            for (i32 ind=0; ind<gs.player_count; ind++) {
+                gs_full_info.data.full_info_dump.players[ind] = gs.players[ind];
+            }
+            
             send_packet(connect_socket,&clientaddr,&gs_full_info);
 
             gl_server.s_clients[gl_server.client_count].addr = clientaddr;
             gl_server.clients[gl_server.client_count++] = clientaddr;
 
+            add_player();
+            gs.players[gs.player_count-1].id = gs.player_count-1;
+            gs.players[gs.player_count-1].interp_delay = 0;
+            
             packet_t player_join = {};
             player_join.type = ADD_PLAYER;
             player_join.data.id = res.data.id;
@@ -82,28 +84,30 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
         } else if (p.type == PING) {
 
+            /*
             // ping after first connect
             server_client_t &cl = gl_server.s_clients[gl_server.client_count];
             cl.connection_time = p.data.ping_dump.server_time_on_accept;
             cl.ping = SDL_GetTicks() - cl.connection_time;
+            */
             // realistically should send the ping back..?
         } else if (p.type == COMMAND_DATA) {
             
             int new_commands=0;
             for (i32 n=0;n<p.data.command_data.count;n++) {
                 command_t &cmd = p.data.command_data.commands[n];
-                gl_server.NetState.command_buffer[gl_server.NetState.buffer_count++] = cmd;
+                gl_server.NetState.command_buffer.push_back(cmd);
                 new_commands++;
             }
             
-            printf("%d new commands\n", new_commands);
+            printf("%d new commands from %f to %f\n", new_commands, p.data.command_data.start_time, p.data.command_data.end_time);
         }
     }
     return 0;
 }
 
 int partition(command_t *arr, int low, int high) {
-    int pivot = arr[low].time;
+    double pivot = arr[low].time;
     int k = high;
     for (int i=high; i > low; i--) {
         if (arr[i].time > pivot) {
@@ -166,8 +170,8 @@ void mergesort_commands(command_t *buffer, u32 &buffer_count, command_t *stack, 
 
 static void send_command_data() {
     // send last 1 second of commands
-    int end_time=gl_server.time;
-    int start_time=end_time-1000;
+    double end_time=gl_server.time;
+    double start_time=end_time-0.5;
 
     packet_t p = {};
     p.type = COMMAND_DATA;
@@ -175,11 +179,10 @@ static void send_command_data() {
     p.data.command_data.end_time = end_time;
     p.data.command_data.count = 0;
 
-    for (u32 ind=0; ind<gl_server.NetState.stack_count; ind++) {
-        command_t &cmd = gl_server.NetState.command_stack[ind];
+    for (auto &cmd: gl_server.NetState.command_stack) {
         if (cmd.time > end_time) {
             break;
-        } else if (cmd.time > start_time) {
+        } else if (cmd.time >= start_time) {
             p.data.command_data.commands[p.data.command_data.count++] = cmd;
         }
     }
@@ -189,8 +192,9 @@ static void send_command_data() {
 
 
 static void send_snapshot() {
+    /*
     // merge command buffer if it exists
-    if (gl_server.NetState.buffer_count) {
+    if (gl_server.NetState.command_buffer.size()) {
         mergesort_commands(gl_server.NetState.command_buffer,gl_server.NetState.buffer_count,gl_server.NetState.command_stack,gl_server.NetState.stack_count);
     }
     // go through recent commands, rebuild up to present
@@ -200,49 +204,42 @@ static void send_snapshot() {
     p.type = SNAPSHOT_DATA;
     p.data.snapshot = gs;
     broadcast(&p);
+    */
 }
 
 
-static void process_buffer_commands(u64 server_time) {
+static void process_buffer_commands(double server_time) {
     // disregard commands from greater than 500ms ago
-    for (i32 ind=0;ind<gl_server.NetState.buffer_count;ind++) {
-        if (gl_server.NetState.command_buffer[ind].time < server_time-500) {
-            gl_server.NetState.command_buffer[ind] = gl_server.NetState.command_buffer[--gl_server.NetState.buffer_count];
+    std::vector<command_t> &buf=gl_server.NetState.command_buffer;
+    for (i32 ind=0; ind<gl_server.NetState.command_buffer.size(); ind++) {
+        if (buf[ind].time < server_time-0.5) {
+            buf.erase(buf.begin()+ind);
+            ind--;
         }
     }
-    if (gl_server.NetState.buffer_count == 0) {
+    if (gl_server.NetState.command_buffer.size()==0) {
         return;
     }
-    command_t old_first_cmd = gl_server.NetState.command_buffer[0];
-    u32 old_size=gl_server.NetState.buffer_count;
     // rewind to first command there and update up
-    if (gl_server.NetState.buffer_count > 1) {
-        quicksort_commands(gl_server.NetState.command_buffer,0,gl_server.NetState.buffer_count);
+    if (buf.size() > 1) {
+        std::sort(buf.begin(),buf.end(),command_sort_by_time());
+        //quicksort_commands(gl_server.NetState.command_buffer,0,gl_server.NetState.buffer_count);
     }
     command_t first_cmd = gl_server.NetState.command_buffer[0];
     if (first_cmd.sending_id == ID_DONT_EXIST) {
-        if (old_first_cmd.sending_id != first_cmd.sending_id) {
-            printf("MEGA FUCK\n");
-            if (old_size != gl_server.NetState.buffer_count) {
-                printf("TRIPLE FUCK\n");
-            }
-        }
         printf("FUCK\n");
         // bad news this just got ran!!!!
     }
 
     // dont rewind state it doesnt run
     // update to past (present - 2 seconds for example) and it runs fine but out of sync
-    u64 present=gs.time;
-    if (first_cmd.time < server_time) {
-        printf("Rewinding %lldms\n",server_time-first_cmd.time);
+    if (first_cmd.time < gs.time) {
+        printf("Rewinding %fs\n",server_time-first_cmd.time);
         rewind_game_state(gs,gl_server.NetState,first_cmd.time);
-    } else {
-        printf("oh fuck\n");
     }
-    mergesort_commands(gl_server.NetState.command_buffer,gl_server.NetState.buffer_count,gl_server.NetState.command_stack,gl_server.NetState.stack_count);
-    gl_server.NetState.buffer_count=0;
-
+    gl_server.NetState.command_stack.insert(gl_server.NetState.command_stack.end(),buf.begin(),buf.end());
+    std::sort(gl_server.NetState.command_stack.begin(),gl_server.NetState.command_stack.end(),command_sort_by_time());
+    gl_server.NetState.command_buffer.clear();
 }
 
 
@@ -278,18 +275,48 @@ static void server() {
     srand((u32)time(NULL));
 
     int ticks=0;
+    gl_server.header.tickrate = 50;
     
-    const int TICK_TIME = (int)((1.f/(float)gl_server.header.tickrate) * 1000.f);
-    const int SNAP_TIME = (int)((1.f/(float)gl_server.header.snaprate) * 1000.f);
+    const double TICK_TIME = (1.0/(double)gl_server.header.tickrate);
+    const double SNAP_TIME = (1.0/(double)gl_server.header.snaprate);
 
-    u32 start_time = SDL_GetTicks();
-    u32 last_frame_time=start_time;
-    u32 last_snapshot_time = start_time;
-    gl_server.time = start_time;
+    /*
+    {
+        i64 start_time;
+        LARGE_INTEGER frequency;        // Frequency of the performance counter
+        LARGE_INTEGER start, end;       // Ticks at the start and end of the operation
+        double interval;
+
+        // Retrieve the frequency of the performance counter
+        if (!QueryPerformanceFrequency(&frequency)) {
+            std::cerr << "High-resolution performance counter not supported." << std::endl;
+            return;
+        }
+
+        // Get the current counter value at start
+        QueryPerformanceCounter(&start_time);
+
+        // Perform some operations whose duration you want to measure
+        Sleep(1000);  // Simulating a delay (1000 milliseconds)
+
+        // Get the current counter value at end
+        QueryPerformanceCounter(&end);
+
+        // Calculate the interval in seconds
+        interval = static_cast<double>(end.QuadPart - start_time.QuadPart) / frequency.QuadPart;
+
+        std::cout << "Duration: " << interval << " seconds." << std::endl;
+    }
+    */
+    gl_server.timer.Start();
+    
+    double last_tick_time=0;
+    double last_snapshot_time=0;
+    gl_server.time=0;
+    gs.time = 0;
 
     socklen_t addr_len = sizeof(clientaddr);
     
-    gs.time = gl_server.time;
 
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
@@ -333,44 +360,45 @@ static void server() {
     // tick thread
     while (running) {
         PollEvents(&input,&running);
-        u64 server_time = SDL_GetTicks64();
-        int delta = server_time - last_frame_time;
+        double server_time = gl_server.timer.get();
+        // best guess is the commands are recorded on the client as being far off from when they
+        // occured in actual server time
+        double delta = server_time - last_tick_time;
 
-        if (gl_server.NetState.buffer_count > 0) {
+        if (gl_server.NetState.command_buffer.size() > 0) {
             process_buffer_commands(server_time);
         }
         update_game_state(gs,gl_server.NetState,server_time);
-        
+
         // send last second of commands
-        // send_command_data();
+        gl_server.time = server_time;
+        send_command_data();
 
         // Render start
         SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
         SDL_RenderClear(sdl_renderer);
 
-        for (u32 id=0; id<gs.player_count; id++) {
+        for (i32 id=0; id<gs.player_count; id++) {
             character &p = gs.players[id];
             SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
             
             SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,32,32};
             SDL_RenderFillRect(sdl_renderer, &rect);
         }
-        
+
         SDL_RenderPresent(sdl_renderer);
 
         // send out the last x seconds worth of commands
-        int timer = server_time - last_frame_time;
-        gl_server.time = server_time;
 
-        if (timer < TICK_TIME) {
-            u32 next_frame_time = last_frame_time + TICK_TIME;
-            if (next_frame_time - server_time > 0) {
-                Sleep(next_frame_time - server_time);
+        {
+            double next_tick_time = last_tick_time + TICK_TIME;
+            double curr = gl_server.timer.get();
+            if (next_tick_time > curr) {
+                Sleep((DWORD)((next_tick_time - curr)*1000.0));
             }
-            last_frame_time = next_frame_time;
-        } else {
-            last_frame_time = server_time;
+            last_tick_time = server_time;
         }
+
     }
     closesocket(gl_server.socket);
 }

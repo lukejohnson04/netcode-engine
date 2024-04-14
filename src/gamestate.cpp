@@ -1,8 +1,9 @@
 
+
 struct game_state {
-    u8 player_count=0;
+    i32 player_count=0;
     character players[8];
-    int time=0;
+    double time=0;
 };
 
 global_variable game_state gs;
@@ -17,50 +18,59 @@ void add_player() {
 
 // bridge between gamestate and network
 struct netstate_info_t {
-    
-    command_t command_stack[1024];
-    u32 stack_count=0;
-    command_t command_buffer[1024];
-    u32 buffer_count=0;
-    
     // fuck it
-    //std::vector<command_t> command_stack;
-    //std::vector<command_t> command_buffer;
+    std::vector<command_t> command_stack;
+    std::vector<command_t> command_buffer;
     
     game_state snapshots[256];
     int snapshot_count=0;
 };
 
 
-static void rewind_game_state(game_state &gst, netstate_info_t &c, int target_time) {
-    for (i32 i=c.stack_count-1; i>=0; i--) {
+static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
+    if (target_time > gst.time) {
+        printf("ERROR: Rewinding into the future!\n");
+    }
+    for (i32 i=(i32)c.command_stack.size()-1; i>=0; i--) {
         command_t &cmd = c.command_stack[i];
+        if (cmd.time < target_time) {
+            break;
+        }
         for (i32 n=0; n<gst.player_count; n++) {
             character &player=gst.players[n];
-            update_player(&player,(float)(cmd.time-player.r_time)/1000.f);
+            update_player(&player,(cmd.time-player.r_time));
         }
         unprocess_command(&gst.players[cmd.sending_id],cmd);
+        gst.time = cmd.time;
     }
     for (i32 ind=0; ind<gst.player_count; ind++) {
         character &player=gst.players[ind];
-        update_player(&player,(float)(target_time-player.r_time)/1000.f);
+        update_player(&player,(target_time-player.r_time));
     }
     gst.time = target_time;
 }
 
 // assumes we're only going into the future
-static void update_game_state(game_state &gst, netstate_info_t &c, int target_time) {
+static void update_game_state(game_state &gst, netstate_info_t &c, double target_time) {
+    printf("Updating game state by %f",target_time-gst.time);
     if (target_time < gst.time) {
-        printf("massive error\n");
+        printf("ERROR: Updating into the past!\n");
     }
+
+    std::vector<command_t> full_stack;// = c.command_stack;
+    full_stack.insert(full_stack.begin(),c.command_stack.begin(),c.command_stack.end());
+    full_stack.insert(full_stack.end(),c.command_buffer.begin(),c.command_buffer.end());
+    std::sort(full_stack.begin(),full_stack.end(),command_sort_by_time());
+    printf(" with %zd commands\n",full_stack.size());
+    
+
     command_t *curr=nullptr;
-    for (u32 ind=0; ind<c.stack_count; ind++) {
-        command_t &cmd = c.command_stack[ind];
+    for (auto &cmd: full_stack) {
         if (cmd.time >= gst.time) {
             if (cmd.time > target_time) {
                 break;
             }
-            curr = &c.command_stack[ind];
+            curr = &cmd;//&c.command_stack[ind];
             break;
         }
     }
@@ -68,21 +78,20 @@ static void update_game_state(game_state &gst, netstate_info_t &c, int target_ti
     while (curr) {
         for (i32 ind=0;ind<gst.player_count;ind++) {
             character &player = gst.players[ind];
-            update_player(&player,(curr->time - gst.time)/1000.f);
+            update_player(&player,(curr->time - gst.time));
         }
         process_command(&gst.players[curr->sending_id],*curr);
         gst.time = curr->time;
         curr++;
-        if (curr >= c.command_stack+c.stack_count || curr->time > target_time) {
+        if (curr >= &full_stack[0] + full_stack.size() || curr->time > target_time) {
             curr=nullptr;
         }
     }
 
-    for (u32 ind=0;ind<gst.player_count;ind++) {
+    for (i32 ind=0;ind<gst.player_count;ind++) {
         character &player = gst.players[ind];
-        update_player(&player,(target_time - gst.time)/1000.f);
+        update_player(&player,(target_time - gst.time));
         player.r_time = target_time;
     }
     gst.time = target_time;
 }
-

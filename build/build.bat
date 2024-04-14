@@ -3,7 +3,7 @@ pushd "B:\dev\Prototypes\netcode\build"
 REM Optimization switches /O2 /Oi /fp:fast
 REM set CommonCompilerFlags=/O2 /MTd /nologo /fp:fast /Gm- /GR- /EHa /Zo /Oi /WX /W4 /wd4201 /wd4100 /wd4189 /wd4505 /wd4127 /DHANDMADE_INTERNAL=1 /DHANDMADE_SLOW=1 /DHANDMADE_WIN32 /Z7 /FC /F4194304
 REM set CommonLinkerFlags= -incremental:no -opt:ref  user32.lib gdi32.lib winmm.lib
-SET CommonCompilerFlags= /MP /GR- /Zi /Zo /Oi /WX /EHsc
+SET CommonCompilerFlags= /MP /GR- /Zi /Zo /Oi /WX /EHsc -W3 -wd4201 -wd4100
 @rem SET CommonCompilerFlags= -O2 -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -WX -W4 -wd4201 -wd4100 -wd4189 -wd4505 -wd4127 -FC -Z7 -GS- -Gs9999999
 set Includes= /I "../" /I "B:/frameworks/SDL2-2.28.4/include" /I "B:/frameworks/SDL2_ttf-2.20.2/include" /I "B:\frameworks\SDL2_mixer-2.8.0\include" /I "B:\frameworks\SDL2_image-2.6.3\include"
 set Libraries= SDL2main.lib SDL2.lib SDL2_image.lib SDL2_ttf.lib SDL2_mixer.lib

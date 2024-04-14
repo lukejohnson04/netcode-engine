@@ -35,6 +35,9 @@ struct v2i {
     int x,y;
 };
 
+inline v2 operator*(v2 left, double right) {
+    return {left.x*(float)right,left.y*(float)right};
+}
 
 inline v2 operator*(v2 left, float right) {
     return {left.x*right,left.y*right};

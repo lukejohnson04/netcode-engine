@@ -1,14 +1,14 @@
 
+
 struct client_t {
     u32 client_id=ID_DONT_EXIST;
     int socket;
     sockaddr_in servaddr;
 
-    // server SDL tick time when they received our connection
-    i64 server_time_on_connection;
-    // local SDL tick time  when we received acceptance of our connection
-    i64 local_time_on_connection;
-    int ping=0;
+    double server_time_on_connection;
+    double local_time_on_connection;
+    double ping=0;
+    timer_t sync_timer;
 
     netstate_info_t NetState;
 
@@ -18,23 +18,22 @@ struct client_t {
 
     bool init_ok=false;
     // delay
-    int lerp=100;
     server_header_t server_header;
 };
 
 
 global_variable client_t client_st={};
 
-static inline int get_current_server_time(client_t cl) {
-    return cl.server_time_on_connection + ((i64)SDL_GetTicks64() - cl.local_time_on_connection);
-}
+//static inline int get_current_server_time(client_t cl) {
+//    return cl.server_time_on_connection + ((i64)SDL_GetTicks64() - cl.local_time_on_connection);
+//}
 
-static inline int client_time_to_server_time(i64 local_time, client_t cl) {
-    return cl.server_time_on_connection + (local_time - cl.local_time_on_connection) + cl.ping;
+static inline double client_time_to_server_time(client_t cl) {
+    return cl.server_time_on_connection + cl.sync_timer.get() - cl.ping;
 }
 
 static void add_command_to_recent_commands(command_t cmd) {
-    client_st.NetState.command_buffer[client_st.NetState.buffer_count++] = cmd;
+    client_st.NetState.command_buffer.push_back(cmd);
 }
 
 
@@ -54,51 +53,53 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         } else if (pc.type == ADD_PLAYER) {
             add_player();
             if (pc.data.id == client_st.client_id) {
-                client_st.game_data.player_id = gs.player_count - 1;
+                client_st.game_data.player_id = client_st.client_id;
+                gs.players[client_st.game_data.player_id].interp_delay=0;
             }
 
         } else if (pc.type == GS_FULL_INFO) {
-            
-            while (gs.player_count < pc.data.count) {
-                add_player();
+            printf("changing from %d players to %d players\n", gs.player_count, pc.data.full_info_dump.p_count);
+            gs.player_count = pc.data.full_info_dump.p_count;
+            for (i32 ind=0; ind<gs.player_count; ind++) {
+                gs.players[ind] = pc.data.full_info_dump.players[ind];
+                printf("New player %d at position %f,%f\n",gs.players[ind].id,gs.players[ind].pos.x,gs.players[ind].pos.y);
             }
             
-
+            if (gs.player_count-1 >= (i32)client_st.client_id) {
+                client_st.game_data.player_id = (i32)client_st.client_id;
+            }
+            
         } else if (pc.type == SNAPSHOT_DATA) {
             continue;
             // 2. interpret snapshots and rebuild gamestate everytime one comes in
             
             client_st.NetState.snapshots[client_st.NetState.snapshot_count++] = pc.data.snapshot;
-            for (u32 ind=0; ind<pc.data.snapshot.player_count; ind++) {
+            for (i32 ind=0; ind<pc.data.snapshot.player_count; ind++) {
                 if (ind != client_st.client_id) {
                     gs.players[ind] = pc.data.snapshot.players[ind];
                 }
             }
-            
-
         } else if (pc.type == COMMAND_DATA) {
-            continue;
-            
-            command_t new_commands[256];
-            u32 new_command_count=0;
-            for (int ind=0;ind<pc.data.command_data.count;ind++) {
-                if (pc.data.command_data.commands[ind].sending_id == client_st.client_id) {
-                    continue;
+            std::vector<command_t> new_commands;
+            for (i32 ind=0; ind<pc.data.command_data.count; ind++) {
+                command_t &cmd=pc.data.command_data.commands[ind];
+                // remove duplicates
+                if (find(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),cmd) == client_st.NetState.command_stack.end()) {
+                    new_commands.push_back(cmd);
+                    if (cmd.sending_id != client_st.client_id) {
+                        printf("New command: %d %c%d\n",cmd.sending_id,cmd.press?'+':'-',cmd.code);
+                    }
                 }
-                command_t cmd=pc.data.command_data.commands[ind];
-                new_commands[new_command_count++] = cmd;
             }
-            
-            if (new_command_count > 0) {
-                quicksort_commands(new_commands,0,new_command_count);
-                // should be sorted already
-                command_t first_command = new_commands[0];
-                // rewind the gamestate to that first command
-                rewind_game_state(gs,client_st.NetState,first_command.time);
-                // 1. combine command data
-                mergesort_commands(new_commands,new_command_count,client_st.NetState.command_stack,client_st.NetState.stack_count);
-                update_game_state(gs,client_st.NetState,get_current_server_time(client_st));
-                
+
+            if (new_commands.size() != 0) {
+                std::sort(new_commands.begin(),new_commands.end(),command_sort_by_time());
+                if (new_commands[0].time < gs.time) {
+                    rewind_game_state(gs,client_st.NetState,new_commands[0].time);
+                }
+                // merge
+                client_st.NetState.command_stack.insert(client_st.NetState.command_stack.end(),new_commands.begin(),new_commands.end());
+                std::sort(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),command_sort_by_time());
             }
 
         } else {
@@ -127,17 +128,11 @@ static void client_connect(int port) {
     servaddr.sin_port = htons((short) port);
     servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    char out_buf[4096];
-    char in_buf[4096];
-    strcpy_s(out_buf, "Test message from CLIENT to SERVER");
-    
-    int n, addr_len;
-
     // connection request
     packet_t p = {};
     p.type = CONNECTION_REQUEST;
 
-    i64 send_time = SDL_GetTicks64();
+    client_st.sync_timer.Start();
     int ret = send_packet(connect_socket,&servaddr,&p);
 
     if (ret < 0) {
@@ -153,17 +148,19 @@ static void client_connect(int port) {
     if (p.type == CONNECTION_ACCEPTED) {
         printf("Connection accepted\n");
         client_st.client_id = p.data.connection_dump.id;
+        printf("Client id is %d\n",client_st.client_id);
+        client_st.local_time_on_connection = client_st.sync_timer.get();
         client_st.server_time_on_connection = p.data.connection_dump.server_time;
         // subtract half of ping from this!
-        client_st.local_time_on_connection = SDL_GetTicks64();
-        client_st.ping = (client_st.local_time_on_connection - send_time) / 2;
+        client_st.ping = client_st.local_time_on_connection / 2.0;
+        client_st.server_header = p.data.connection_dump.server_header;
         
         //packet_t res = {};
         //res.type = PING;
         //res.data.ping_dump.server_time_on_accept = client_st.connection_time_server;
         //send_packet(connect_socket,&servaddr,&res);
 
-        printf("Server time on connection: %lld\n", client_st.server_time_on_connection);
+        //printf("Server time on connection: %lld\n", client_st.server_time_on_connection);
         //printf("Server time currently: %d", client_st.connection_server + (SDL_GetTicks() - client_st.connection_time_client));
     } else if (p.type == CONNECTION_DENIED) {
         printf("Connection denied\n");
@@ -185,18 +182,27 @@ static void client_on_tick() {
     // really we should be sending the last second or so of commands
     // to combat packet loss, but we won't worry about that for now
     // because it gives us a massive headache removing duplicates
-    
+    if (client_st.NetState.command_buffer.empty()) {
+        return;
+    }
     packet_t p = {};
     p.type = COMMAND_DATA;
     p.data.command_data = {};
     
     p.data.command_data.count = 0;
 
-    for (u32 ind=0; ind<client_st.NetState.buffer_count; ind++) {
-        command_t &cmd = client_st.NetState.command_buffer[ind];
+    for (i32 ind=0; ind<client_st.NetState.command_buffer.size(); ind++) {
+        command_t cmd = client_st.NetState.command_buffer[ind];
+        // reverse the interpolation delay on the command
         p.data.command_data.commands[p.data.command_data.count++] = cmd;
     }
-    client_st.NetState.buffer_count=0;
+    p.data.command_data.start_time = client_st.NetState.command_buffer[0].time;
+    p.data.command_data.end_time = client_st.NetState.command_buffer.back().time;
 
+    client_st.NetState.command_stack.insert(client_st.NetState.command_stack.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());
+    std::sort(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),command_sort_by_time());
+
+    client_st.NetState.command_buffer.clear();
+    
     send_packet(client_st.socket,&client_st.servaddr,&p);
 }

@@ -1,4 +1,11 @@
 
+
+struct server_header_t {
+    double command_sliding_window_len = 0.5;
+    int tickrate=40;
+    int snaprate=20;
+};
+
 enum PACKET_TYPE {
     NONE,
     CONNECTION_REQUEST,
@@ -29,21 +36,26 @@ struct packet_t {
         u32 count;
 
         struct {
-            int start_time;
-            int end_time;
+            u32 p_count;
+            character players[8];
+        } full_info_dump;
+        
+        struct {
+            double start_time;
+            double end_time;
             int count;
             command_t commands[256];
         } command_data;
 
         struct {
             entity_id id;
-            int server_time;
+            double server_time;
+            server_header_t server_header;
         } connection_dump;
 
         struct {
             int server_time_on_accept;
         } ping_dump;
-
         
         game_state snapshot;
 
@@ -62,6 +74,30 @@ int recieve_packet(int socket, sockaddr_in *addr, packet_t *p) {
     return recvfrom(socket, (char*)p, sizeof(packet_t), 0,
                     (struct sockaddr *)addr, &addr_len);
 }
+
+struct timer_t {
+    LARGE_INTEGER start_time,frequency;
+
+    void Start() {
+        if (!QueryPerformanceFrequency(&frequency)) {
+            std::cerr << "High-resolution performance counter not supported." << std::endl;
+            return;
+        }
+        QueryPerformanceCounter(&start_time);
+    }
+
+    double get() {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        // Calculate the interval in seconds
+        return static_cast<double>(end.QuadPart - start_time.QuadPart) / frequency.QuadPart;
+    }
+
+    void Restart() {
+        QueryPerformanceCounter(&start_time);
+    }
+};
+
 
 
 struct snapshot_t {

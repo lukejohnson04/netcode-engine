@@ -1,0 +1,2 @@
+fix player/client id to make it just one number
+OR make it more explicit why it matters

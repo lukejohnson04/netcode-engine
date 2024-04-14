@@ -15,15 +15,15 @@ struct command_t {
     u8 code;
     // this is false if the command is being released instead of pressed
     bool press;
-    int time;
+    double time;
     // dont initialize until you send bc it doesnt matter
     u32 sending_id=ID_DONT_EXIST;
 };
 
-
-struct command_stack_t {
-    command_t stack[1024];
-    u32 count=0;
+struct command_sort_by_time {
+    bool operator()(command_t a, command_t b) const {
+        return a.time < b.time;
+    }
 };
 
 
@@ -36,11 +36,10 @@ struct character {
     v2 vel;
 
     // net header
-    int r_time;
-    u32 ghost=ID_DONT_EXIST;
     u32 id=ID_DONT_EXIST;
-    int ghost_delay = 2000;
-    int creation_time;
+    double r_time;
+    double creation_time;
+    double interp_delay=0.1;
 
     bool command_state[CMD_COUNT];
 };
@@ -67,10 +66,10 @@ void unprocess_command(character *player, command_t cmd) {
     player->command_state[cmd.code] = !cmd.press;
 }
 
+static void add_command_to_recent_commands(command_t cmd);
 
-void add_command_to_recent_commands(command_t cmd);
 
-void update_player_controller(character *player,int time) {
+void update_player_controller(character *player,double time) {
     // 16 max commands a tick
     command_t new_commands[16];
     u32 cmd_count=0;
@@ -94,12 +93,16 @@ void update_player_controller(character *player,int time) {
     }
 
     for (u32 id=0; id < cmd_count; id++) {
-        process_command(player,new_commands[id]);
+        //process_command(player,new_commands[id]);
         add_command_to_recent_commands(new_commands[id]);
     }
 }
 
-void update_player(character *player, float delta) {
+void update_player(character *player, double delta) {
+    if (player->r_time + delta < player->creation_time) {
+        delta = player->r_time - player->creation_time;
+    }
+    
     float move_speed = 300;
     if (player->command_state[CMD_LEFT]) {
         player->vel.x = -move_speed;
@@ -115,49 +118,56 @@ void update_player(character *player, float delta) {
         player->vel.y = 0;
     }
     player->pos += player->vel * delta;
-    player->r_time += (int)(delta*1000.f);
+    player->r_time += delta;
 }
 
-void rewind_player(character *player, int target_time, command_t *cmd_stack, u32 cmd_count) {
+void rewind_player(character *player, double target_time, std::vector<command_t> &cmd_stack) {
+    if (player->r_time < target_time) {
+        printf("rewinding into the future\n");
+    }
+    
     // Update up to the next command. Repeat until there are no more commands
-    for (u32 ind=cmd_count-1; ind>=0; ind--) {
+    for (i32 ind=(i32)cmd_stack.size()-1; ind>=0; ind--) {
         if (cmd_stack[ind].time > player->r_time) {
             continue;
         }
-        if ((player->ghost != ID_DONT_EXIST && player->ghost != cmd_stack[ind].sending_id) || (player->ghost == ID_DONT_EXIST && cmd_stack[ind].sending_id != player->id)) {
+        if (cmd_stack[ind].sending_id != player->id) {
             continue;
         } if (cmd_stack[ind].time < target_time) {
             break;
         } else if (cmd_stack[ind].time <= player->r_time) { 
-            update_player(player,(cmd_stack[ind].time-player->r_time)/1000.f);
+            update_player(player,(cmd_stack[ind].time-player->r_time));
             unprocess_command(player,cmd_stack[ind]);
             player->r_time = cmd_stack[ind].time;
         }
     }
 
     if (player->r_time > target_time) {
-        update_player(player,(target_time-player->r_time)/1000.f);
+        update_player(player,(target_time-player->r_time));
     }
     player->r_time = target_time;
 }
 
 
 // fast forwards the player up to the given end time
-void fast_forward_player(character *player, int curr_time, int end_time, command_t *cmd_stack, u32 cmd_count) {
-    for (u32 ind=0; ind<cmd_count; ind++) {
-        if ((player->ghost != ID_DONT_EXIST && player->ghost != cmd_stack[ind].sending_id) || (player->ghost == ID_DONT_EXIST && cmd_stack[ind].sending_id != player->id)) {
+void fast_forward_player(character *player, double end_time, std::vector<command_t> &cmd_stack) {
+    if (player->r_time > end_time) {
+        printf("fast forwarding into the past\n");
+    }
+    for (i32 ind=0; ind<cmd_stack.size(); ind++) {
+        if (cmd_stack[ind].sending_id != player->id) {
             continue;
         } if (cmd_stack[ind].time > end_time) {
             break;
-        } else if (cmd_stack[ind].time >= curr_time) {
-            update_player(player,(cmd_stack[ind].time-curr_time)/1000.f);
+        } else if (cmd_stack[ind].time >= player->r_time) {
+            update_player(player,(cmd_stack[ind].time-player->r_time));
             process_command(player,cmd_stack[ind]);
-            curr_time = cmd_stack[ind].time;
         }
     }
 
-    if (curr_time < end_time) {
-        update_player(player,(end_time-curr_time)/1000.f);
+    if (player->r_time < end_time) {
+        update_player(player,(end_time-player->r_time));
     }
     player->r_time = end_time;
 }
+

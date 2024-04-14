@@ -1,4 +1,5 @@
 
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -6,10 +7,14 @@
 #include <string>
 #include <time.h>
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
 #include <vector>
+#include <algorithm>
+#include <iostream>
 
 #include "common.h"
 
@@ -74,37 +79,71 @@ static void GameGUIStart() {
 
     bool running=true;
 
-    const float FRAME_TIME = (1.f/60.f);
+    gs.time = client_st.server_time_on_connection;
+    const double FRAME_TIME = (1.0/60.0);
     const int FRAME_TIME_MS = (1000/60);
     
-    int TICK_TIME = (int)((1.f/(float)client_st.server_header.tickrate) * 1000.f);
-    u64 last_tick_time = SDL_GetTicks64();
-    u64 last_frame_time = last_tick_time;
+    const double TICK_TIME = (1.0/(double)client_st.server_header.tickrate);
+    double start_time = client_st.sync_timer.get();
+    double last_tick_time = start_time;
+    double last_frame_time = start_time;
+    // fix this time shit lol
     
     client_st.init_ok=true;
-    gs.time = client_st.server_time_on_connection;
+
+    double interp_delay = 0.05;
 
     while (running) {
         PollEvents(&input,&running);
-        u64 local_time = SDL_GetTicks64();
-        int delta = local_time - last_frame_time;
-        int s_time = client_time_to_server_time(local_time,client_st);
+        double local_time = client_st.sync_timer.get();
+        double delta = local_time - last_frame_time;
+        double s_time = client_time_to_server_time(client_st);
+        double interp_time = s_time - interp_delay;
+        // we want everything to update and display 100 ms in the past, EXCEPT the player!
+        // the player is client sided so there is no interpolation delay!
+        // we need to realize the actions the player takes in the present can interact
+        // with the actions we are interpolating towards!
+        character *player=nullptr;
         
         if (client_st.game_data.player_id != ID_DONT_EXIST) {
-            character *player = &gs.players[client_st.game_data.player_id];
+            player = &gs.players[client_st.game_data.player_id];
             update_player_controller(player,s_time);
-            //update_player(&gs.players[client_st.game_data.player_id],(frame_time-last_frame_time)/1000.f);
+            //update_player(player,delta);
         }
-        //rewind_game_state(gs,client_st.NetState,frame_time-2000);
-        update_game_state(gs,client_st.NetState,s_time);
 
+        // take the list of the whole command stack, including the unsent client commands
+        // for each command, update the game state up to that point.
         
+        // we want to always be showing the game state from interp_delay milliseconds in the past
+        // the one exception is the player for the client who we want to be showing in the present,
+        // predicting that the client input will go through without a hitch
+
+        // rewind player to current gamestate time
+        std::vector<command_t> full_stack;
+        {
+            std::vector<command_t> &cst=client_st.NetState.command_stack;
+            std::vector<command_t> &cbf=client_st.NetState.command_buffer;
+            full_stack.insert(full_stack.begin(),cst.begin(),cst.end());
+            full_stack.insert(full_stack.end(),cbf.begin(),cbf.end());
+            std::sort(full_stack.begin(),full_stack.end(),command_sort_by_time());
+        }
+
+        if (player) {
+            rewind_player(player,gs.time,full_stack);
+        }
+
+        // bring gamestate to interpolation time
+        update_game_state(gs,client_st.NetState,interp_time);
+        // update player to prediction time
+        if (player) {
+            fast_forward_player(player,s_time,full_stack);
+        }
+
         // Render start
         SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
         SDL_RenderClear(sdl_renderer);
-
         
-        for (u32 id=0; id<gs.player_count; id++) {
+        for (i32 id=0; id<gs.player_count; id++) {
             character &p = gs.players[id];
             SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
             
@@ -116,20 +155,25 @@ static void GameGUIStart() {
         SDL_RenderPresent(sdl_renderer);
 
         {
-            u32 timer = local_time - last_tick_time;
+            double next_frame_time = last_frame_time + FRAME_TIME;
+            double next_tick_time = last_tick_time + TICK_TIME;
+            double curr = client_st.sync_timer.get();
 
-            if (timer > TICK_TIME) {
-                last_tick_time = local_time;
+            if (curr > next_tick_time) {
+                last_tick_time = next_tick_time;
                 client_on_tick();
+                /*
+                static int tick=0;
+                tick++;
+                printf("%d\n",tick);
+                */
             }
 
-            u64 curr = SDL_GetTicks64();
-            if (local_time+FRAME_TIME_MS > curr) {
-                Sleep((local_time+FRAME_TIME_MS)-curr);
+            if (next_frame_time > curr) {
+                Sleep((DWORD)((next_frame_time - curr)*1000));
             }
+            last_frame_time = local_time;
         }
-
-        last_frame_time = local_time;
     }
     
     SDL_DestroyRenderer(sdl_renderer);
@@ -155,7 +199,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "not enough args!");
             return -1;
         } if (argc == 3) {
-            sscanf(argv[2], "%d", &port);
+            sscanf_s(argv[2], "%d", &port);
         }
 
         client_connect(port);
