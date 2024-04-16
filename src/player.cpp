@@ -5,11 +5,27 @@ enum {
     CMD_RIGHT,
     CMD_UP,
     CMD_DOWN,
-    CMD_COUNT,
+
+    CMD_PUNCH,
+    // shoot is bullet
+    CMD_SHOOT,
 
     // Server commands
-    CMD_ADD_PLAYER
+    CMD_ADD_PLAYER,
+    
+    CMD_COUNT,
 };
+
+
+struct bullet_t {
+    v2 pos;
+    v2 vel;
+};
+
+void update_bullet(bullet_t &bullet,double delta) {
+    bullet.pos += bullet.vel*delta;
+}
+
 
 struct command_t {
     u8 code;
@@ -18,6 +34,10 @@ struct command_t {
     double time;
     // dont initialize until you send bc it doesnt matter
     u32 sending_id=ID_DONT_EXIST;
+
+    union {
+        entity_id obj_id;
+    } props;
 };
 
 struct command_sort_by_time {
@@ -31,15 +51,40 @@ bool operator==(const command_t &left, const command_t &right) {
     return left.code == right.code && left.time == right.time && left.press == right.press && left.sending_id == right.sending_id;
 }
 
-struct character {
-    v2 pos;
-    v2 vel;
+static void add_command_to_recent_commands(command_t cmd);
+static void add_bullet(bullet_t bullet);
 
-    // net header
+
+// this should be in network and entities shouldn't have any idea about ANY of this information!
+// TODO: abstract this out, make entities stupid
+struct entity_net_header_t {
     u32 id=ID_DONT_EXIST;
     double r_time;
     double creation_time;
     double interp_delay=0.1;
+};
+
+
+
+
+struct character {
+    v2 pos;
+    v2 vel;
+
+    enum {
+        IDLE,
+        MOVING,
+        PUNCHING,
+        CHARACTER_STATE_COUNT
+    } curr_state=IDLE;
+
+    union {
+        double timer=0.0;
+    } state;
+    
+    u32 id=ID_DONT_EXIST;
+    double r_time;
+    double creation_time;
 
     bool command_state[CMD_COUNT];
 };
@@ -55,18 +100,39 @@ character create_player(v2 pos,u32 nid) {
 
 
 void process_command(character *player, command_t cmd) {
-    player->command_state[cmd.code] = cmd.press;
+    if (cmd.code == CMD_PUNCH) {
+        player->state.timer = 0.25;
+        player->curr_state = character::PUNCHING;
+    } else if (cmd.code == CMD_SHOOT) {
+        bullet_t bullet;
+        bullet.pos = player->pos;
+        bullet.vel = {100.f,0.f};
+        add_bullet(bullet);
+    } else {
+        player->command_state[cmd.code] = cmd.press;
+    }
 }
+
+
+static void pop_bullet();
 
 
 // NOTE: this doesn't save the previous state!!! SO if you're holding right,
 // and then somehow a +right gets fired, when reversing it it will always reset
 // to a -right instead of maintaining the previous state of moving right!!!
-void unprocess_command(character *player, command_t cmd) {
-    player->command_state[cmd.code] = !cmd.press;
-}
 
-static void add_command_to_recent_commands(command_t cmd);
+// can't undo animation like this because we don't know where we were in the
+// animation when the command was called
+void unprocess_command(character *player, command_t cmd) {
+    if (cmd.code == CMD_SHOOT) {
+        pop_bullet();
+    } else if (cmd.code == CMD_PUNCH) {
+        player->state.timer = 0;
+        player->curr_state = character::IDLE;
+    } else {
+        player->command_state[cmd.code] = !cmd.press;
+    }
+}
 
 
 void update_player_controller(character *player,double time) {
@@ -90,6 +156,10 @@ void update_player_controller(character *player,double time) {
         new_commands[cmd_count++] = {CMD_DOWN,true,time,player->id};
     } else if (input.just_released[SDL_SCANCODE_S]) {
         new_commands[cmd_count++] = {CMD_DOWN,false,time,player->id};
+    } if (input.just_pressed[SDL_SCANCODE_SPACE]) {
+        new_commands[cmd_count++] = {CMD_SHOOT,true,time,player->id};
+    } if (input.mouse_just_pressed) {
+        new_commands[cmd_count++] = {CMD_PUNCH,true,time,player->id};
     }
 
     for (u32 id=0; id < cmd_count; id++) {
@@ -102,6 +172,17 @@ void update_player(character *player, double delta) {
     if (player->r_time + delta < player->creation_time) {
         delta = player->r_time - player->creation_time;
     }
+
+    /*
+    if (player->command_state[CMD_SHOOT]) {
+        player->command_state[CMD_SHOOT] = false;
+        bullet_t bullet;
+        bullet.pos = player->pos;
+        bullet.vel = {100.f,0.f};
+        add_bullet(bullet);
+    }
+    */
+    
     
     float move_speed = 300;
     if (player->command_state[CMD_LEFT]) {
@@ -118,6 +199,17 @@ void update_player(character *player, double delta) {
         player->vel.y = 0;
     }
     player->pos += player->vel * delta;
+
+    // anim
+    player->state.timer -= delta;
+    if (player->state.timer < 0) {
+        player->state.timer = 0.0;
+        if (player->curr_state == character::PUNCHING) {
+            player->curr_state = character::IDLE;
+        }
+    }
+
+
     player->r_time += delta;
 }
 

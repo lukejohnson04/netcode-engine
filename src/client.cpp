@@ -54,7 +54,6 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             add_player();
             if (pc.data.id == client_st.client_id) {
                 client_st.game_data.player_id = client_st.client_id;
-                gs.players[client_st.game_data.player_id].interp_delay=0;
             }
 
         } else if (pc.type == GS_FULL_INFO) {
@@ -71,14 +70,6 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             
         } else if (pc.type == SNAPSHOT_DATA) {
             continue;
-            // 2. interpret snapshots and rebuild gamestate everytime one comes in
-            
-            client_st.NetState.snapshots[client_st.NetState.snapshot_count++] = pc.data.snapshot;
-            for (i32 ind=0; ind<pc.data.snapshot.player_count; ind++) {
-                if (ind != client_st.client_id) {
-                    gs.players[ind] = pc.data.snapshot.players[ind];
-                }
-            }
         } else if (pc.type == COMMAND_DATA) {
             std::vector<command_t> new_commands;
             for (i32 ind=0; ind<pc.data.command_data.count; ind++) {

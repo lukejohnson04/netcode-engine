@@ -3,16 +3,27 @@
 struct game_state {
     i32 player_count=0;
     character players[8];
+    
+    i32 bullet_count=0;
+    bullet_t bullets[64];
     double time=0;
 };
 
 global_variable game_state gs;
 
-void add_player() {
+static void add_player() {
     u32 id = gs.player_count++;
     gs.players[id] = create_player({0,0},id);
     gs.players[id].creation_time = gs.time;
     gs.players[id].r_time = gs.time;
+}
+
+static void add_bullet(bullet_t n_bullet) {
+    gs.bullets[gs.bullet_count++] = n_bullet;
+}
+
+static void pop_bullet() {
+    gs.bullet_count--;
 }
 
 
@@ -50,6 +61,20 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
     gst.time = target_time;
 }
 
+
+static void commandless_fast_forward(game_state &gst, double curr_time, double target_time) {
+    for (i32 ind=0;ind<gst.player_count;ind++) {
+        character &player = gst.players[ind];
+        update_player(&player,(target_time - curr_time));
+    }
+
+    for (i32 ind=0; ind<gst.bullet_count; ind++) {
+        bullet_t &bullet = gst.bullets[ind];
+        update_bullet(bullet,(target_time-curr_time));
+    }
+}
+
+
 // assumes we're only going into the future
 static void update_game_state(game_state &gst, netstate_info_t &c, double target_time) {
     printf("Updating game state by %f",target_time-gst.time);
@@ -76,10 +101,7 @@ static void update_game_state(game_state &gst, netstate_info_t &c, double target
     }
     
     while (curr) {
-        for (i32 ind=0;ind<gst.player_count;ind++) {
-            character &player = gst.players[ind];
-            update_player(&player,(curr->time - gst.time));
-        }
+        commandless_fast_forward(gst,gst.time,curr->time);
         process_command(&gst.players[curr->sending_id],*curr);
         gst.time = curr->time;
         curr++;
@@ -88,10 +110,6 @@ static void update_game_state(game_state &gst, netstate_info_t &c, double target
         }
     }
 
-    for (i32 ind=0;ind<gst.player_count;ind++) {
-        character &player = gst.players[ind];
-        update_player(&player,(target_time - gst.time));
-        player.r_time = target_time;
-    }
+    commandless_fast_forward(gst,gst.time,target_time);
     gst.time = target_time;
 }

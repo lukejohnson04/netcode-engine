@@ -23,6 +23,16 @@ enum PACKET_TYPE {
     SNAPSHOT_DATA
 };
 
+struct snapshot_t {
+    game_state state;
+    double time;
+};
+
+
+static void load_snapshot(snapshot_t s) {
+    gs = s.state;
+}
+
 // just assume all packets are 1KB for now lol
 struct packet_t {
     u8 type;
@@ -57,7 +67,7 @@ struct packet_t {
             int server_time_on_accept;
         } ping_dump;
         
-        game_state snapshot;
+        snapshot_t snapshot;
 
         command_t command;
     } data;
@@ -97,15 +107,3 @@ struct timer_t {
         QueryPerformanceCounter(&start_time);
     }
 };
-
-
-
-struct snapshot_t {
-    game_state state;
-    int time;
-};
-
-
-static void load_snapshot(snapshot_t s) {
-    gs = s.state;
-}

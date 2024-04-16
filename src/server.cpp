@@ -75,7 +75,6 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
             add_player();
             gs.players[gs.player_count-1].id = gs.player_count-1;
-            gs.players[gs.player_count-1].interp_delay = 0;
             
             packet_t player_join = {};
             player_join.type = ADD_PLAYER;
@@ -192,19 +191,7 @@ static void send_command_data() {
 
 
 static void send_snapshot() {
-    /*
-    // merge command buffer if it exists
-    if (gl_server.NetState.command_buffer.size()) {
-        mergesort_commands(gl_server.NetState.command_buffer,gl_server.NetState.buffer_count,gl_server.NetState.command_stack,gl_server.NetState.stack_count);
-    }
-    // go through recent commands, rebuild up to present
-    update_game_state(gs,gl_server.NetState,gl_server.time);
     
-    packet_t p = {};
-    p.type = SNAPSHOT_DATA;
-    p.data.snapshot = gs;
-    broadcast(&p);
-    */
 }
 
 
@@ -311,7 +298,7 @@ static void server() {
     gl_server.timer.Start();
     
     double last_tick_time=0;
-    double last_snapshot_time=0;
+    double last_snap_time=0;
     gl_server.time=0;
     gs.time = 0;
 
@@ -354,6 +341,7 @@ static void server() {
     }
 
     screenSurface = SDL_GetWindowSurface(window);
+    init_textures(sdl_renderer);
 
     bool running=true;
 
@@ -373,26 +361,49 @@ static void server() {
         // send last second of commands
         gl_server.time = server_time;
         send_command_data();
-
         // Render start
         SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
         SDL_RenderClear(sdl_renderer);
-
+        
         for (i32 id=0; id<gs.player_count; id++) {
             character &p = gs.players[id];
-            SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+            //SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+
+            SDL_Rect src_rect = {p.curr_state == character::PUNCHING ? 64 : 0,0,32,32};
+            SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,64,64};
+            SDL_RenderCopy(sdl_renderer,textures[PLAYER_TEXTURE],&src_rect,&rect);
+            //SDL_RenderFillRect(sdl_renderer, &rect);
+        }
+
+        for (i32 id=0; id<gs.bullet_count; id++) {
+            bullet_t &b = gs.bullets[id];
+            SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
             
-            SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,32,32};
+            SDL_Rect rect = {(int)b.pos.x,(int)b.pos.y,8,8};
             SDL_RenderFillRect(sdl_renderer, &rect);
         }
 
+        
         SDL_RenderPresent(sdl_renderer);
 
         // send out the last x seconds worth of commands
 
         {
+            double next_snap_time = last_snap_time + SNAP_TIME;
             double next_tick_time = last_tick_time + TICK_TIME;
             double curr = gl_server.timer.get();
+            if (curr > next_snap_time) {
+                snapshot_t snap;
+                // align this to current tick..?
+                snap.time = gs.time;
+                snap.state = gs;
+                packet_t p = {};
+                p.type = SNAPSHOT_DATA;
+                p.data.snapshot = snap;
+
+                broadcast(&p);
+            }
+            
             if (next_tick_time > curr) {
                 Sleep((DWORD)((next_tick_time - curr)*1000.0));
             }

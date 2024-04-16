@@ -1,5 +1,4 @@
 
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -27,6 +26,7 @@
 #include <SDL_image.h>
 #include <SDL_mixer.h>
 
+#include "render.cpp"
 #include "input.cpp"
 #include "player.cpp"
 
@@ -76,6 +76,7 @@ static void GameGUIStart() {
     }
 
     screenSurface = SDL_GetWindowSurface(window);
+    init_textures(sdl_renderer);
 
     bool running=true;
 
@@ -99,10 +100,7 @@ static void GameGUIStart() {
         double delta = local_time - last_frame_time;
         double s_time = client_time_to_server_time(client_st);
         double interp_time = s_time - interp_delay;
-        // we want everything to update and display 100 ms in the past, EXCEPT the player!
-        // the player is client sided so there is no interpolation delay!
-        // we need to realize the actions the player takes in the present can interact
-        // with the actions we are interpolating towards!
+
         character *player=nullptr;
         
         if (client_st.game_data.player_id != ID_DONT_EXIST) {
@@ -145,9 +143,19 @@ static void GameGUIStart() {
         
         for (i32 id=0; id<gs.player_count; id++) {
             character &p = gs.players[id];
-            SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+            //SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+
+            SDL_Rect src_rect = {p.curr_state == character::PUNCHING ? 64 : 0,0,32,32};
+            SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,64,64};
+            SDL_RenderCopy(sdl_renderer,textures[PLAYER_TEXTURE],&src_rect,&rect);
+            //SDL_RenderFillRect(sdl_renderer, &rect);
+        }
+
+        for (i32 id=0; id<gs.bullet_count; id++) {
+            bullet_t &b = gs.bullets[id];
+            SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
             
-            SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,32,32};
+            SDL_Rect rect = {(int)b.pos.x,(int)b.pos.y,8,8};
             SDL_RenderFillRect(sdl_renderer, &rect);
         }
 
