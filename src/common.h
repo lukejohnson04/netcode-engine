@@ -27,6 +27,8 @@ typedef u32 entity_id;
 
 #define ID_DONT_EXIST 99999999
 
+#define FOR(arr,count) for(auto obj=arr;obj<arr+count;obj++)
+
 
 struct v2 {
     float x,y;
@@ -70,4 +72,42 @@ inline v2 &operator-=(v2 &left, v2 right) {
     left.x -= right.x;
     left.y -= right.y;
     return left;
+}
+
+
+struct iRect {
+    int x,y,w,h;
+};
+
+struct fRect {
+    fRect(float nx,float ny,float nw,float nh) : x(nx),y(ny),w(nw),h(nh) {}
+    fRect(iRect a) : x((float)a.x),y((float)a.y),w((float)a.w),h((float)a.h) {}
+    float x,y,w,h;
+};
+
+bool rects_collide(fRect a, fRect b)
+{
+    if (a.w == 0 || a.h == 0 || b.w == 0 || b.h == 0)
+    {
+        return false;
+    }
+    bool res = a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    return res;
+}
+
+bool rects_collide(iRect a, iRect b) {
+    return rects_collide(fRect(a),fRect(b));
+}
+
+bool rects_collide(fRect a, iRect b) {
+    return rects_collide(a,fRect(b));
+}
+
+
+float lerp(float a, float b, float f) {
+    return a * (1.0f-f) + (b*f);
+}
+
+v2 lerp(v2 a, v2 b, float f) {
+    return {lerp(a.x,b.x,f),lerp(a.y,b.y,f)};
 }

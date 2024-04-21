@@ -1,10 +1,16 @@
 
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string>
 #include <time.h>
+#include <cmath>
+#include <tchar.h>
+#include <conio.h>
+#include <strsafe.h>
+
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 
@@ -55,7 +61,9 @@ static void GameGUIStart() {
         return;
     }
 
-    window = SDL_CreateWindow("Main",
+    char winstr[] = "Client x";
+    winstr[7] = client_st.client_id + '0';
+    window = SDL_CreateWindow(winstr,
                               SDL_WINDOWPOS_UNDEFINED,
                               SDL_WINDOWPOS_UNDEFINED,
                               1280,
@@ -81,107 +89,70 @@ static void GameGUIStart() {
     bool running=true;
 
     gs.time = client_st.server_time_on_connection;
-    const double FRAME_TIME = (1.0/60.0);
-    const int FRAME_TIME_MS = (1000/60);
-    
-    const double TICK_TIME = (1.0/(double)client_st.server_header.tickrate);
     double start_time = client_st.sync_timer.get();
-    double last_tick_time = start_time;
-    double last_frame_time = start_time;
     // fix this time shit lol
     
     client_st.init_ok=true;
 
-    double interp_delay = 0.05;
+    int input_send_hz=30;
+    int tick_hz=60;
+    int frame_hz=0; // uncapped framerate
+    double tick_delta=(1.0/tick_hz);
+    double input_send_delta = (1.0/input_send_hz);
+
+    // have server send next tick time
+    // currently we have the server time and the last tick
+    // but we aren't sure how long ago the last tick was
+
+    timer_t global_timer;
+    global_timer.Start();
+
+    r_clock_t tick_clock(global_timer);
+    r_clock_t input_send_clock(global_timer);
+    tick_clock.start_time -= client_st.sync_timer.get() - client_st.time_of_last_tick_on_connection;
+
+    int target_tick=client_st.last_tick;
+    
+    add_wall({5,3});
+    add_wall({6,3});
+    add_wall({7,3});
+    add_wall({8,3});
+    add_wall({5,5});
+    add_wall({6,7});
+
+    gs.players[client_st.client_id].cmd_interp = 0;
+    // delay it by 10 ticks, so 1/6 of a second
 
     while (running) {
+        // input
         PollEvents(&input,&running);
-        double local_time = client_st.sync_timer.get();
-        double delta = local_time - last_frame_time;
-        double s_time = client_time_to_server_time(client_st);
-        double interp_time = s_time - interp_delay;
 
         character *player=nullptr;
+        if (gs.players[client_st.client_id].id != ID_DONT_EXIST) {
+            player = &gs.players[client_st.client_id];
+        }
+
+        int o_num=target_tick;
+        target_tick = client_st.get_exact_current_server_tick();
+        if (o_num != target_tick) {
+            printf("Tick %d\n",target_tick);
+        }
         
-        if (client_st.game_data.player_id != ID_DONT_EXIST) {
-            player = &gs.players[client_st.game_data.player_id];
-            update_player_controller(player,s_time);
-            //update_player(player,delta);
+        update_player_controller(player,target_tick);
+        //if (gs.tick < target_tick)
+        //load_game_state_up_to_tick(gs,client_st.NetState,target_tick,false);
+        while(gs.tick<target_tick) {
+            gs.update(client_st.NetState,tick_delta);
+            gs.tick++;
+            tick_clock.start_time += tick_delta;
         }
 
-        // take the list of the whole command stack, including the unsent client commands
-        // for each command, update the game state up to that point.
-        
-        // we want to always be showing the game state from interp_delay milliseconds in the past
-        // the one exception is the player for the client who we want to be showing in the present,
-        // predicting that the client input will go through without a hitch
-
-        // rewind player to current gamestate time
-        std::vector<command_t> full_stack;
-        {
-            std::vector<command_t> &cst=client_st.NetState.command_stack;
-            std::vector<command_t> &cbf=client_st.NetState.command_buffer;
-            full_stack.insert(full_stack.begin(),cst.begin(),cst.end());
-            full_stack.insert(full_stack.end(),cbf.begin(),cbf.end());
-            std::sort(full_stack.begin(),full_stack.end(),command_sort_by_time());
+        if (input_send_clock.getElapsedTime() > input_send_delta) {
+            client_send_input();
+            input_send_clock.Restart();
         }
 
-        if (player) {
-            rewind_player(player,gs.time,full_stack);
-        }
-
-        // bring gamestate to interpolation time
-        update_game_state(gs,client_st.NetState,interp_time);
-        // update player to prediction time
-        if (player) {
-            fast_forward_player(player,s_time,full_stack);
-        }
-
-        // Render start
-        SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
-        SDL_RenderClear(sdl_renderer);
-        
-        for (i32 id=0; id<gs.player_count; id++) {
-            character &p = gs.players[id];
-            //SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
-
-            SDL_Rect src_rect = {p.curr_state == character::PUNCHING ? 64 : 0,0,32,32};
-            SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,64,64};
-            SDL_RenderCopy(sdl_renderer,textures[PLAYER_TEXTURE],&src_rect,&rect);
-            //SDL_RenderFillRect(sdl_renderer, &rect);
-        }
-
-        for (i32 id=0; id<gs.bullet_count; id++) {
-            bullet_t &b = gs.bullets[id];
-            SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
-            
-            SDL_Rect rect = {(int)b.pos.x,(int)b.pos.y,8,8};
-            SDL_RenderFillRect(sdl_renderer, &rect);
-        }
-
-        
-        SDL_RenderPresent(sdl_renderer);
-
-        {
-            double next_frame_time = last_frame_time + FRAME_TIME;
-            double next_tick_time = last_tick_time + TICK_TIME;
-            double curr = client_st.sync_timer.get();
-
-            if (curr > next_tick_time) {
-                last_tick_time = next_tick_time;
-                client_on_tick();
-                /*
-                static int tick=0;
-                tick++;
-                printf("%d\n",tick);
-                */
-            }
-
-            if (next_frame_time > curr) {
-                Sleep((DWORD)((next_frame_time - curr)*1000));
-            }
-            last_frame_time = local_time;
-        }
+        render_game_state(sdl_renderer);
     }
     
     SDL_DestroyRenderer(sdl_renderer);
@@ -200,6 +171,7 @@ int main(int argc, char *argv[]) {
         printf("Failed to startup winsock. Error code: %d", WSAGetLastError());
         return -1;
     }
+
     
     if (argc > 1 && !strcmp(argv[1], "client")) {
         int port = DEFAULT_PORT;
@@ -210,6 +182,7 @@ int main(int argc, char *argv[]) {
             sscanf_s(argv[2], "%d", &port);
         }
 
+        
         client_connect(port);
     } else {
         server();

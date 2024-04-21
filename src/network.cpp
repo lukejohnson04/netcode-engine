@@ -45,6 +45,8 @@ struct packet_t {
         entity_id id;
         u32 count;
 
+        character new_player;
+
         struct {
             u32 p_count;
             character players[8];
@@ -60,6 +62,8 @@ struct packet_t {
         struct {
             entity_id id;
             double server_time;
+            double time_of_last_tick;
+            int last_tick;
             server_header_t server_header;
         } connection_dump;
 
@@ -67,7 +71,7 @@ struct packet_t {
             int server_time_on_accept;
         } ping_dump;
         
-        snapshot_t snapshot;
+        game_state snapshot;
 
         command_t command;
     } data;
@@ -106,4 +110,31 @@ struct timer_t {
     void Restart() {
         QueryPerformanceCounter(&start_time);
     }
+
+    double Tick() {
+        double val = get();
+        Restart();
+        return val;
+    }
+};
+
+// clock_t records time relative to a global clock;
+struct r_clock_t {
+
+    r_clock_t(timer_t &t) : m_timer(t) {
+        start_time = m_timer.get();
+    }    
+
+    double getElapsedTime() {
+        return m_timer.get() - start_time;
+    }
+
+    void Restart() {
+        start_time = m_timer.get();
+    }
+
+    double start_time;
+    
+private:
+    timer_t &m_timer;
 };
