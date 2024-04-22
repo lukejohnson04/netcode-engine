@@ -12,17 +12,13 @@ enum {
 
     // Server commands
     CMD_ADD_PLAYER,
+    CMD_DIE,
     
     CMD_COUNT,
 };
 
-struct bullet_t {
-    v2 pos;
-    v2 vel;
-};
-
 void update_bullet(bullet_t &bullet,double delta) {
-    bullet.pos += bullet.vel*delta;
+    bullet.position += bullet.vel*delta;
 }
 
 
@@ -37,6 +33,7 @@ struct command_t {
 
     union {
         entity_id obj_id;
+        float rot;
     } props;
 };
 
@@ -67,12 +64,20 @@ struct entity_net_header_t {
 struct character {
     v2 pos;
     v2 vel;
+    i32 health=100;
+
+    bool flip=false;
+
+    double damage_timer=0.0;
+    double reload_timer=0.0;
+    double animation_timer=0.0;
 
     enum {
         IDLE,
         MOVING,
         PUNCHING,
         TAKING_DAMAGE,
+        DEAD,
         CHARACTER_STATE_COUNT
     } curr_state=IDLE;
 
@@ -98,18 +103,22 @@ character create_player(v2 pos,u32 nid) {
     return p;
 }
 
+static void add_bullet(v2 pos, float rot, entity_id shooter_id);
 
 void process_command(character *player, command_t cmd) {
     if (cmd.code == CMD_PUNCH) {
         player->state.timer = 0.25;
         player->curr_state = character::PUNCHING;
+    } else if (cmd.code == CMD_SHOOT) {
+        add_bullet(player->pos+v2(16,16), cmd.props.rot, player->id);
+        player->reload_timer=3.0;
+    } else if (cmd.code == CMD_DIE) {
+        player->curr_state = character::DEAD;
     } else {
         player->command_state[cmd.code] = cmd.press;
     }
+    // if (cmd.code == CMD_LEFT || cmd.code == CMD_RIGHT || cmd.code == CMD_UP || cmd.code == CMD_DOWN) {
 }
-
-
-static void pop_bullet();
 
 
 // NOTE: this doesn't save the previous state!!! SO if you're holding right,
@@ -152,24 +161,33 @@ void update_player_controller(character *player, int tick) {
         new_commands[cmd_count++] = {CMD_DOWN,true,tick,player->id};
     } else if (input.just_released[SDL_SCANCODE_S]) {
         new_commands[cmd_count++] = {CMD_DOWN,false,tick,player->id};
-    } if (input.just_pressed[SDL_SCANCODE_SPACE]) {
+    } if (input.just_pressed[SDL_SCANCODE_SPACE] && player->reload_timer == 0) {
+        v2i mPos = get_mouse_position();
+        float rot = get_angle_to_point(player->pos+v2(16,16)+v2(8,8),mPos);
+
         new_commands[cmd_count++] = {CMD_SHOOT,true,tick,player->id};
+        new_commands[cmd_count-1].props.rot = rot;
     } if (input.mouse_just_pressed) {
         new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
     }
 
     for (u32 id=0; id < cmd_count; id++) {
-        //process_command(player,new_commands[id]);
         add_command_to_recent_commands(new_commands[id]);
     }
 }
 
 void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players) {
+    if (player->curr_state == character::DEAD) {
+        return;
+    }
+    
     float move_speed = 300;
     if (player->command_state[CMD_LEFT]) {
         player->vel.x = -move_speed;
+        player->flip = true;
     } else if (player->command_state[CMD_RIGHT]) {
         player->vel.x = move_speed;
+        player->flip = false;
     } else {
         player->vel.x = 0;
     } if (player->command_state[CMD_UP]) {
@@ -225,6 +243,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         if (player->pos.x > obj->pos.x && player->pos.x < obj->pos.x + 50 && abs(player->pos.y - obj->pos.y) < 32) {
             // get punched!
             player->curr_state = character::TAKING_DAMAGE;
+            player->state.timer = 0.5;
             break;
         }
     }
@@ -234,9 +253,19 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         player->state.timer -= delta;
         if (player->state.timer <= 0) {
             player->state.timer = 0.0;
-            if (player->curr_state == character::PUNCHING) {
+            //if (player->curr_state == character::PUNCHING) {
                 player->curr_state = character::IDLE;
-            }
+                //}
+        }
+    } if (player->damage_timer) {
+        player->damage_timer -= delta;
+        if (player->damage_timer <= 0) {
+            player->damage_timer = 0;
+        }
+    } if (player->reload_timer) {
+        player->reload_timer -= delta;
+        if (player->reload_timer <= 0) {
+            player->reload_timer = 0;
         }
     }
 
@@ -298,3 +327,8 @@ void fast_forward_player(character *player, double end_time, std::vector<command
 }
 
 */
+
+void player_take_damage(character *player, int dmg) {
+    player->health -= dmg;
+    player->damage_timer=0.5;
+}

@@ -83,7 +83,7 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             client_st.NetState.snapshots.push_back(pc.data.snapshot);
             //if (client_st.NetState.snapshots.front().tick < gs.tick) {
             int curr_tick=gs.tick;
-            if (pc.data.snapshot.tick<gs.tick) {
+            if (pc.data.snapshot.tick<=gs.tick) {
                 gs = pc.data.snapshot;
                 // this wont work for client because we only have commands for the local player
                 

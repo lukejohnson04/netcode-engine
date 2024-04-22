@@ -41,3 +41,9 @@ void PollEvents(InputState *state, bool *running) {
         }
     }
 }
+
+v2i get_mouse_position() {
+    v2i pos;
+    SDL_GetMouseState(&pos.x,&pos.y);
+    return pos;
+}

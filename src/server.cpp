@@ -240,12 +240,13 @@ static void server() {
 
     gl_server.last_tick=0;
     gl_server.last_tick_time=gl_server.timer.get();
+    gl_server.NetState.authoritative=true;
 
     // TODO: figure out input bufffer/whether the server should update and send information with
     // a built in latency or not
     // e.g. when sending a snapshot do they send the latest or the one from 2 snapshots ago, so it
     // never sends an incorrect snapshots?
-    int snapshot_buffer=1;
+    int snapshot_buffer=0;
     int target_tick=0;
     
     // tick thread
@@ -259,8 +260,8 @@ static void server() {
         gl_server.last_tick=target_tick;
 
         if (snap_clock.getElapsedTime() > snap_delta) {
-            
-            snap_clock.Restart();
+            snap_clock.start_time += snap_delta;
+            //snap_clock.Restart();
             load_game_state_up_to_tick(gs,gl_server.NetState,target_tick);
             
             gl_server.NetState.add_snapshot(gs);
@@ -273,11 +274,11 @@ static void server() {
 
                 printf("Sending snapshot for %d\n",p.data.snapshot.tick);
                 broadcast(&p);
-                gs = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-snapshot_buffer];
             }
         }
 
         render_game_state(sdl_renderer);
+        SDL_RenderPresent(sdl_renderer);
         
         // sleep up to next snapshot
         {

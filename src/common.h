@@ -26,17 +26,29 @@ typedef real64 d64; // double
 typedef u32 entity_id;
 
 #define ID_DONT_EXIST 99999999
+#define ID_SERVER 566
 
 #define FOR(arr,count) for(auto obj=arr;obj<arr+count;obj++)
+#define FORn(arr,count,name) for(auto name=arr;name<arr+count;name++)
 
 
-struct v2 {
-    float x,y;
-};
+#define PI 3.1415926f
 
 struct v2i {
     int x,y;
 };
+
+struct v2 {
+    float x,y;
+    v2(float nx, float ny) : x(nx), y(ny) {}
+    v2(v2i a) : x((float)a.x),y((float)a.y) {}
+    v2() {}
+    v2 normalize() {
+        float len = sqrt((x * x) + (y * y));
+        return v2(x / len, y / len);
+    }
+};
+
 
 inline v2 operator*(v2 left, double right) {
     return {left.x*(float)right,left.y*(float)right};
@@ -110,4 +122,40 @@ float lerp(float a, float b, float f) {
 
 v2 lerp(v2 a, v2 b, float f) {
     return {lerp(a.x,b.x,f),lerp(a.y,b.y,f)};
+}
+
+struct Color {
+    u8 r,g,b,a;
+};
+
+static float get_angle_to_point(v2 a, v2 b) {
+    float angle = atan2(a.y - b.y, a.x - b.x);
+    return angle;
+}
+
+static v2 convert_angle_to_vec(float angle) {
+    v2 p = {-cos(angle), -sin(angle)};
+    return p;
+}
+
+// Function to determine difference between angles, accounting for wrapping (i.e. comparing 720 and 30)
+static float angle_diff(float a, float b) {
+    return PI - abs(abs(a-b) - PI);
+}
+
+static v2 get_vec_to_point(v2 a, v2 b) {
+    v2 diff = {b.x - a.x, b.y - a.y};
+    return diff.normalize();
+}
+
+static float convert_vec_to_angle(v2 a) {
+    return get_angle_to_point({0,0},a);
+}
+
+float deg_2_rad(float d) {
+    return d * (PI/180.f);
+}
+
+float rad_2_deg(float d) {
+    return d / (PI/180.f);
 }
