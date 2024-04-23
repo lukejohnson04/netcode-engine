@@ -87,6 +87,9 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             broadcast(&player_join);
 
         } else if (p.type == PING) {
+            packet_t p = {};
+            p.type = PING;
+            send_packet(connect_socket,&clientaddr,&p);
 
             /*
             // ping after first connect
@@ -99,10 +102,25 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             if (p.data.command_data.count==0) {
                 continue;
             }
+
+            // disregard any command more than 20 ticks old
+            if (p.data.command_data.end_time < gl_server.last_tick - 20) {
+                continue;
+            }
             
             for (i32 n=0;n<p.data.command_data.count;n++) {
                 command_t &cmd = p.data.command_data.commands[n];
-                gl_server.NetState.command_buffer.push_back(cmd);
+                if (cmd.tick < gl_server.last_tick - 20) {
+                    continue;
+                }
+                
+                if (std::find(gl_server.NetState.command_stack.begin(),gl_server.NetState.command_stack.end(),cmd)==gl_server.NetState.command_stack.end()) {
+                    if (std::find(gl_server.NetState.command_buffer.begin(),gl_server.NetState.command_buffer.end(),cmd)==gl_server.NetState.command_buffer.end()) {
+                        gl_server.NetState.command_buffer.push_back(cmd);
+                    }
+                }
+                
+                //gl_server.NetState.command_buffer.push_back(cmd);
             }
             
             std::vector<command_t> &buf=gl_server.NetState.command_buffer;
@@ -233,7 +251,7 @@ static void server() {
 
     int input_polling_send_hz=30;
     double tick_hz=60;
-    double snap_hz=20;
+    double snap_hz=60;
     int frame_hz=0; // uncapped framerate
     double tick_delta=(1.0/tick_hz);
     double snap_delta=(1.0/snap_hz);
@@ -265,16 +283,23 @@ static void server() {
             load_game_state_up_to_tick(gs,gl_server.NetState,target_tick);
             
             gl_server.NetState.add_snapshot(gs);
-            printf("Snapshot for tick%d --- ",target_tick);
 
             if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
                 packet_t p = {};
                 p.type = SNAPSHOT_DATA;
                 p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-snapshot_buffer-1];
 
-                printf("Sending snapshot for %d\n",p.data.snapshot.tick);
+                printf("Sending snapshots for %d\n",p.data.snapshot.tick);
                 broadcast(&p);
             }
+            /*
+            // broadcast round end if the final death took place > 1 second ago
+            if (gs.round_end_tick >= 0 && gs.round_end_tick < target_tick-60) {
+                packet_t p = {};
+                p.type = END_ROUND;
+                broadcast(&p);
+            }
+            */
         }
 
         render_game_state(sdl_renderer);

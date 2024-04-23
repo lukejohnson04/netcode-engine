@@ -20,7 +20,9 @@ enum PACKET_TYPE {
     GS_FULL_INFO,
     GAME_DATA,
     COMMAND_DATA,
-    SNAPSHOT_DATA
+    SNAPSHOT_DATA,
+
+    END_ROUND
 };
 
 struct snapshot_t {
@@ -72,6 +74,14 @@ struct packet_t {
         } ping_dump;
         
         game_state snapshot;
+
+        /*
+        struct {
+            game_state snapshots[4];
+            int count=0;
+            
+        } snapshot_dump;
+        */
 
         command_t command;
     } data;

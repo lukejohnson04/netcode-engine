@@ -9,6 +9,7 @@ enum {
     CMD_PUNCH,
     // shoot is bullet
     CMD_SHOOT,
+    CMD_RELOAD,
 
     // Server commands
     CMD_ADD_PLAYER,
@@ -44,9 +45,11 @@ struct command_sort_by_time {
 };
 
 
+
 bool operator==(const command_t &left, const command_t &right) {
-    return left.code == right.code && left.time == right.time && left.press == right.press && left.sending_id == right.sending_id;
+    return left.props.rot == right.props.rot && left.tick == right.tick && left.code == right.code && left.time == right.time && left.press == right.press && left.sending_id == right.sending_id;
 }
+
 
 static void add_command_to_recent_commands(command_t cmd);
 
@@ -68,6 +71,8 @@ struct character {
 
     bool flip=false;
 
+    bool bullet_loaded=true;
+    bool reloading=false;
     double damage_timer=0.0;
     double reload_timer=0.0;
     double animation_timer=0.0;
@@ -104,6 +109,7 @@ character create_player(v2 pos,u32 nid) {
 }
 
 static void add_bullet(v2 pos, float rot, entity_id shooter_id);
+static void command_callback(character *player, command_t cmd);
 
 void process_command(character *player, command_t cmd) {
     if (cmd.code == CMD_PUNCH) {
@@ -111,13 +117,16 @@ void process_command(character *player, command_t cmd) {
         player->curr_state = character::PUNCHING;
     } else if (cmd.code == CMD_SHOOT) {
         add_bullet(player->pos+v2(16,16), cmd.props.rot, player->id);
-        player->reload_timer=3.0;
+        player->bullet_loaded=false;
     } else if (cmd.code == CMD_DIE) {
         player->curr_state = character::DEAD;
+    } else if (cmd.code == CMD_RELOAD) {
+        player->reloading = true;
+        player->reload_timer=3.0;
     } else {
         player->command_state[cmd.code] = cmd.press;
     }
-    // if (cmd.code == CMD_LEFT || cmd.code == CMD_RIGHT || cmd.code == CMD_UP || cmd.code == CMD_DOWN) {
+    command_callback(player,cmd);
 }
 
 
@@ -161,7 +170,7 @@ void update_player_controller(character *player, int tick) {
         new_commands[cmd_count++] = {CMD_DOWN,true,tick,player->id};
     } else if (input.just_released[SDL_SCANCODE_S]) {
         new_commands[cmd_count++] = {CMD_DOWN,false,tick,player->id};
-    } if (input.just_pressed[SDL_SCANCODE_SPACE] && player->reload_timer == 0) {
+    } if (input.just_pressed[SDL_SCANCODE_SPACE] && player->bullet_loaded) {
         v2i mPos = get_mouse_position();
         float rot = get_angle_to_point(player->pos+v2(16,16)+v2(8,8),mPos);
 
@@ -169,6 +178,8 @@ void update_player_controller(character *player, int tick) {
         new_commands[cmd_count-1].props.rot = rot;
     } if (input.mouse_just_pressed) {
         new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
+    } if (input.just_pressed[SDL_SCANCODE_R] && player->bullet_loaded == false && player->reloading == false) {
+        new_commands[cmd_count++] = {CMD_RELOAD,true,tick,player->id};
     }
 
     for (u32 id=0; id < cmd_count; id++) {
@@ -201,6 +212,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     if (player->curr_state == character::TAKING_DAMAGE) {
         player->vel = {0,0};
     }
+
     
     player->pos.x += player->vel.x * (float)delta;
     FOR(walls,wall_count) {
@@ -253,19 +265,23 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         player->state.timer -= delta;
         if (player->state.timer <= 0) {
             player->state.timer = 0.0;
-            //if (player->curr_state == character::PUNCHING) {
-                player->curr_state = character::IDLE;
-                //}
+            player->curr_state = character::IDLE;
         }
     } if (player->damage_timer) {
         player->damage_timer -= delta;
         if (player->damage_timer <= 0) {
             player->damage_timer = 0;
         }
-    } if (player->reload_timer) {
+    } if (player->reloading && player->reload_timer) {
+        if (player->vel != v2(0,0)) {
+            player->reloading=false;
+            // stop sfx if they're playing
+        }
         player->reload_timer -= delta;
         if (player->reload_timer <= 0) {
             player->reload_timer = 0;
+            player->reloading = false;
+            player->bullet_loaded = true;
         }
     }
 

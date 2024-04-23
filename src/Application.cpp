@@ -1,5 +1,4 @@
 
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -33,6 +32,7 @@
 #include <SDL_mixer.h>
 
 #include "render.cpp"
+#include "audio.cpp"
 #include "text.cpp"
 #include "input.cpp"
 
@@ -64,6 +64,12 @@ static void GameGUIStart() {
         return;
     }
 
+    if( Mix_OpenAudio( 44100, MIX_DEFAULT_FORMAT, 2, 2048 ) < 0 )
+    {
+        printf( "SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError() );
+        return;
+    }
+
     char winstr[] = "Client x";
     winstr[7] = client_st.client_id + '0';
     window = SDL_CreateWindow(winstr,
@@ -88,6 +94,8 @@ static void GameGUIStart() {
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
+    init_sfx();
+    
     TTF_Font *mFont = TTF_OpenFont("../res/m5x7.ttf",16);
 
     bool running=true;
@@ -114,6 +122,7 @@ static void GameGUIStart() {
     r_clock_t tick_clock(global_timer);
     r_clock_t input_send_clock(global_timer);
     tick_clock.start_time -= client_st.sync_timer.get() - client_st.time_of_last_tick_on_connection;
+    r_clock_t ping_clock(global_timer);
 
     int target_tick=client_st.last_tick;
     
@@ -163,9 +172,10 @@ static void GameGUIStart() {
         }
 
         if (input_send_clock.getElapsedTime() > input_send_delta) {
-            client_send_input();
+            client_send_input(target_tick);
             input_send_clock.start_time += input_send_delta;
         }
+
 
         render_game_state(sdl_renderer);
         // gui

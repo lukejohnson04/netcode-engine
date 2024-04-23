@@ -11,8 +11,12 @@ struct game_state {
     i32 bullet_count=0;
     bullet_t bullets[128];
 
+    i32 score[8] = {0};
+
     double time=0;
     int tick=0;
+
+    int round_end_tick=-1;
 
     void update(netstate_info_t &c, double delta);
 };
@@ -27,6 +31,7 @@ struct netstate_info_t {
     std::vector<game_state> snapshots;
 
     bool authoritative=false;
+    int interp_delay=0;
 
     void add_snapshot(game_state gs) {
         for (game_state &snap:snapshots) {
@@ -82,6 +87,7 @@ void game_state::update(netstate_info_t &c, double delta) {
             if (player->health <= 0) {
                 command_t kill_command = {CMD_DIE,false,gs.tick,player->id};
                 c.command_stack.push_back(kill_command);
+                round_end_tick = tick;
             }
         }
     }
@@ -99,11 +105,12 @@ void game_state::update(netstate_info_t &c, double delta) {
     }
     
 
-    // interp delay in ms (rounded to nearest tick)
-    int interp_delay = 6;
+    // interp delay in ticks
+    int interp_delay = c.interp_delay;
     int interp_players=0;
     int interp_tick=tick-interp_delay;
     FOR(players,player_count) {
+        if (obj->curr_state == character::DEAD) continue;
         if (c.do_charas_interp[obj->id] && !c.authoritative) {
             interp_players++;
             game_state *prev_snap=nullptr;

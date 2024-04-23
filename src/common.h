@@ -31,6 +31,9 @@ typedef u32 entity_id;
 #define FOR(arr,count) for(auto obj=arr;obj<arr+count;obj++)
 #define FORn(arr,count,name) for(auto name=arr;name<arr+count;name++)
 
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define MAX(a,b) ((a)>(b)?(a):(b))
+
 
 #define PI 3.1415926f
 
@@ -72,6 +75,14 @@ inline v2 operator-(v2 left, v2 right) {
 
 inline v2 operator-(v2 right) {
     return {-right.x,-right.y};
+}
+
+inline bool operator==(v2 &left, v2 &right) {
+    return left.x == right.x && left.y == right.y;
+}
+
+inline bool operator!=(v2 &left, v2 &right) {
+    return left.x != right.x || left.y != right.y;
 }
 
 inline v2 &operator+=(v2 &left, v2 right) {

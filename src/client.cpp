@@ -15,8 +15,11 @@ struct client_t {
     timer_t sync_timer;
     r_clock_t sync_clock;
     int last_tick;
+    
+    double global_time_of_last_ping;
 
     netstate_info_t NetState;
+    std::vector<command_t> command_history;
 
     struct {
         entity_id player_id=ID_DONT_EXIST;
@@ -47,6 +50,20 @@ static inline double client_time_to_server_time(client_t cl) {
 
 static void add_command_to_recent_commands(command_t cmd) {
     client_st.NetState.command_buffer.push_back(cmd);
+}
+
+static void command_callback(character *player, command_t cmd) {
+    if (player->id != client_st.client_id) return;
+    switch (cmd.code) {
+        case CMD_SHOOT:
+            Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_FIRE_SFX], 0 );
+            break;
+        case CMD_RELOAD:
+            Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_RELOAD_SFX], 0 );
+            break;
+        default:
+            break;
+    }
 }
 
 
@@ -147,6 +164,8 @@ static void client_connect(int port) {
     client_st.sync_clock.start_time = client_st.sync_timer.get();
     int ret = send_packet(connect_socket,&servaddr,&p);
 
+    // default interpolation delay - 100ms with default tickrate of 60
+
     if (ret < 0) {
         printf("ERROR: sendto failed\n");
         printf("%d",WSAGetLastError());
@@ -156,18 +175,24 @@ static void client_connect(int port) {
     p = {};
     ret = recieve_packet(connect_socket,&servaddr,&p);
     if (p.type == CONNECTION_ACCEPTED) {
-        printf("Connection accepted\n");
-        client_st.client_id = p.data.connection_dump.id;
-        printf("Client id is %d\n",client_st.client_id);
         client_st.local_time_on_connection = client_st.sync_timer.get();
+        double time_since_request_to_server_was_sent = client_st.sync_clock.getElapsedTime();
+
+        client_st.ping = time_since_request_to_server_was_sent * 1000.0;
+        client_st.client_id = p.data.connection_dump.id;
         client_st.server_time_on_connection = p.data.connection_dump.server_time;
         // subtract half of ping from this!
-        client_st.ping = client_st.local_time_on_connection / 2.0;
         client_st.server_header = p.data.connection_dump.server_header;
         client_st.time_of_last_tick_on_connection=p.data.connection_dump.time_of_last_tick;
         client_st.NetState.do_charas_interp[client_st.client_id]=false;
         client_st.last_tick=p.data.connection_dump.last_tick;
-        client_st.sync_clock.start_time -= client_st.server_time_on_connection+client_st.ping;
+        // is this correct..?
+        client_st.sync_clock.start_time -= (client_st.server_time_on_connection);//+(time_since_request_to_server_was_sent/2.0));
+
+        client_st.NetState.interp_delay = MAX(6,4 + (int)ceil((client_st.ping) / ((1000.0)*(1.0/60.0))));
+
+        printf("Connection accepted\n");
+        printf("Client id is %d with ping %f\n",client_st.client_id,client_st.ping);
         
         //packet_t res = {};
         //res.type = PING;
@@ -195,13 +220,14 @@ static void client_connect(int port) {
 
     client_st.servaddr = servaddr;
     client_st.socket = connect_socket;
+    
 
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ClientListen, (LPVOID)&connect_socket, 0, &ThreadID);
     GameGUIStart();
 }
 
-static void client_send_input() {
+static void client_send_input(int curr_tick) {
     // really we should be sending the last second or so of commands
     // to combat packet loss, but we won't worry about that for now
     // because it gives us a massive headache removing duplicates
@@ -214,13 +240,29 @@ static void client_send_input() {
     
     p.data.command_data.count = 0;
 
-    for (i32 ind=0; ind<client_st.NetState.command_buffer.size(); ind++) {
-        command_t cmd = client_st.NetState.command_buffer[ind];
+    // send last 250ms of commands
+    p.data.command_data.start_time = curr_tick-15;
+    p.data.command_data.end_time = curr_tick;
+
+    client_st.command_history.insert(client_st.command_history.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());
+    i32 first_elem_in_range=0;
+    for (i32 ind=0; ind<client_st.command_history.size(); ind++) {
+        if (client_st.command_history[ind].tick >= p.data.command_data.start_time) {
+            p.data.command_data.commands[p.data.command_data.count++] = client_st.command_history[ind];
+        } else {
+            first_elem_in_range++;
+        }
+    }
+    
+    if (first_elem_in_range >= client_st.command_history.size()) {
+        client_st.command_history.clear();
+    }
+    
+    for (i32 ind=0; ind<client_st.command_history.size(); ind++) {
+        command_t cmd = client_st.command_history[ind];
         // reverse the interpolation delay on the command
         p.data.command_data.commands[p.data.command_data.count++] = cmd;
     }
-    p.data.command_data.start_time = client_st.NetState.command_buffer[0].tick;
-    p.data.command_data.end_time = client_st.NetState.command_buffer.back().tick;
 
     client_st.NetState.command_stack.insert(client_st.NetState.command_stack.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());
     std::sort(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),command_sort_by_time());
