@@ -21,7 +21,11 @@ enum PACKET_TYPE {
     GAME_DATA,
     COMMAND_DATA,
     SNAPSHOT_DATA,
+    INFO_DUMP_ON_CONNECTED,
 
+    NEW_CLIENT_CONNECTED,
+    GAME_START_ANNOUNCEMENT,
+    GMS_CHANGE,
     END_ROUND
 };
 
@@ -72,16 +76,16 @@ struct packet_t {
         struct {
             int server_time_on_accept;
         } ping_dump;
+
+        struct {
+            i32 client_count=0;
+        } info_dump_on_connected;
+
+        double game_start_time;
+        
+        overall_game_manager gms;
         
         game_state snapshot;
-
-        /*
-        struct {
-            game_state snapshots[4];
-            int count=0;
-            
-        } snapshot_dump;
-        */
 
         command_t command;
     } data;

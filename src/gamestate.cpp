@@ -1,6 +1,8 @@
 
 struct netstate_info_t;
 
+
+// should be called world state instead of game state
 struct game_state {
     i32 player_count=0;
     character players[8];
@@ -11,14 +13,34 @@ struct game_state {
     i32 bullet_count=0;
     bullet_t bullets[128];
 
-    i32 score[8] = {0};
-
     double time=0;
     int tick=0;
 
+    void update(netstate_info_t &c, double delta);
+};
+
+enum GMS {
+    GAME_HASNT_STARTED,
+    PREGAME_SCREEN,
+    ROUND_PLAYING,
+    ROUND_END,
+    ROUND_COUNTDOWN,
+};
+
+
+// the reason this struct is 100% SEPARATE from game_state is because we don't want
+// to worry about these details when writing generic update code for the game.
+// we need an interface or something for interaction between the two
+struct overall_game_manager {
+    i32 connected_players=0;
+    i32 state=GAME_HASNT_STARTED;
+    
+    i32 score[8] = {0};
     int round_end_tick=-1;
 
-    void update(netstate_info_t &c, double delta);
+    double game_start_time=0.0;
+
+    double timer=0.0;
 };
 
 
@@ -87,7 +109,6 @@ void game_state::update(netstate_info_t &c, double delta) {
             if (player->health <= 0) {
                 command_t kill_command = {CMD_DIE,false,gs.tick,player->id};
                 c.command_stack.push_back(kill_command);
-                round_end_tick = tick;
             }
         }
     }
@@ -208,6 +229,38 @@ void render_game_state(SDL_Renderer *sdl_renderer) {
 
 }
 
+void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms, double curr_time) {
+    static int connected_last_tick=-1;
+    static generic_drawable connection_text = generate_text(sdl_renderer,m5x7,"Players connected (" + std::to_string(connected_last_tick) + "/2)",{255,255,200});
+    connection_text.scale = {2,2};
+    
+    if (connected_last_tick != gms.connected_players) {
+        connection_text = generate_text(sdl_renderer,m5x7,"Players connected (" + std::to_string(gms.connected_players)+"/2)",{255,255,200});
+        connected_last_tick=gms.connected_players;
+        connection_text.scale = {2,2};
+        connection_text.position = {1280/2-connection_text.get_draw_rect().w/2,380};
+    }
+            
+    SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
+    SDL_RenderClear(sdl_renderer);
+    SDL_Rect dest = {0,0,1280,720};
+    SDL_RenderCopy(sdl_renderer,textures[PREGAME_TEXTURE],NULL,&dest);
+    SDL_RenderCopy(sdl_renderer,connection_text.texture,NULL,&connection_text.get_draw_rect());
+
+    if (gms.game_start_time != 0.0) {
+        double time_till_start = gms.game_start_time - curr_time;
+        std::string str = std::to_string(time_till_start);
+        if (str.size() > 4) {
+            str.erase(str.begin()+4,str.end());
+        }
+        
+        generic_drawable countdown_clock = generate_text(sdl_renderer,m5x7,str,{255,240,40});
+        countdown_clock.scale = {4,4};
+        countdown_clock.position = {1280/2-countdown_clock.get_draw_rect().w/2,480};
+        SDL_RenderCopy(sdl_renderer,countdown_clock.texture,NULL,&countdown_clock.get_draw_rect());
+    }
+}
+
 // loads the first snapshot found before the input time
 void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int start_tick) {
     for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
@@ -221,6 +274,10 @@ void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int s
 
 void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_tick, bool overwrite_snapshots=true) {
     while(gs.tick<target_tick) {
+        gs.update(c,1.0/60.0);
+        gs.tick++;
+        // should this be before or after???
+        // after i think because this function shouldn't have to worry about previous ticks
         // crazy inefficient lol
         if (overwrite_snapshots) {
             for (game_state &snap: c.snapshots) {
@@ -230,8 +287,6 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
                 }
             }
         }
-        gs.update(c,1.0/60.0);
-        gs.tick++;
     }
 }
 

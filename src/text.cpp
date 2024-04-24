@@ -3,9 +3,12 @@
 struct generic_drawable {
     v2i position={0,0};
     SDL_Texture *texture=nullptr;
+    v2 scale={1,1};
     SDL_Rect get_draw_rect() {
         SDL_Rect res={position.x,position.y,0,0};
         SDL_QueryTexture(texture,NULL,NULL,&res.w,&res.h);
+        res.w = (int)(res.w*scale.x);
+        res.h = (int)(res.h*scale.y);
         return res;
     }
 };
@@ -53,3 +56,5 @@ struct text_renderable {
         return res;
     }
 };
+
+TTF_Font *m5x7=nullptr;

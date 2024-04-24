@@ -21,6 +21,8 @@ struct client_t {
     netstate_info_t NetState;
     std::vector<command_t> command_history;
 
+    overall_game_manager gms;
+
     struct {
         entity_id player_id=ID_DONT_EXIST;
     } game_data;
@@ -34,6 +36,12 @@ struct client_t {
         double elapsed = sync_clock.getElapsedTime();
         int ticks_elapsed = (int)floor(elapsed / (1.0/60.0));
         return ticks_elapsed;
+    }
+
+    double get_time_to_next_tick() {
+        double elapsed = sync_clock.getElapsedTime();
+        double next_tick = (int)floor(elapsed/(1.0/60.0)) + 1;
+        return (next_tick*(1.0/60.0))-elapsed;
     }
 };
 
@@ -80,6 +88,9 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         if (pc.type == MESSAGE) {
             printf("%s\n", pc.data.msg);
 
+        } else if (pc.type == NEW_CLIENT_CONNECTED) {
+            client_st.gms.connected_players++;
+
         } else if (pc.type == ADD_PLAYER) {
             gs.players[gs.player_count++] = pc.data.new_player;
             if (pc.data.new_player.id == client_st.client_id) {
@@ -87,10 +98,16 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             } else {
                 client_st.NetState.do_charas_interp[pc.data.new_player.id] = true;
             }
+            client_st.gms.connected_players++;
+        } else if (pc.type == INFO_DUMP_ON_CONNECTED) {
+            client_st.gms.connected_players=pc.data.info_dump_on_connected.client_count;
+            client_st.client_id = client_st.gms.connected_players-1;
+            printf("%d\n",client_st.gms.connected_players);
 
         } else if (pc.type == GS_FULL_INFO) {
             printf("changing from %d players to %d players\n", gs.player_count, pc.data.full_info_dump.p_count);
             gs = pc.data.snapshot;
+            client_st.gms.connected_players=gs.player_count;
             
             if (gs.player_count-1 >= (i32)client_st.client_id) {
                 client_st.game_data.player_id = (i32)client_st.client_id;
@@ -106,6 +123,10 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
                 
                 // load_game_state_up_to_tick(gs,client_st.NetState,curr_tick,false);
             }
+
+        } else if (pc.type == GAME_START_ANNOUNCEMENT) {
+            client_st.gms.game_start_time = pc.data.game_start_time;
+
         } else if (pc.type == COMMAND_DATA) {
             continue;
             std::vector<command_t> new_commands;

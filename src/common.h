@@ -100,6 +100,7 @@ inline v2 &operator-=(v2 &left, v2 right) {
 
 struct iRect {
     int x,y,w,h;
+    iRect(SDL_Rect a) : x(a.x),y(a.y),w(a.w),h(a.h) {}
 };
 
 struct fRect {
@@ -107,6 +108,12 @@ struct fRect {
     fRect(iRect a) : x((float)a.x),y((float)a.y),w((float)a.w),h((float)a.h) {}
     float x,y,w,h;
 };
+
+
+bool rect_contains_point(iRect rect, v2 point) {
+    return (point.x > rect.x && point.x < rect.x+rect.w && point.y > rect.y && point.y < rect.y+rect.h);
+}
+
 
 bool rects_collide(fRect a, fRect b)
 {

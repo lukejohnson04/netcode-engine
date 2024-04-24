@@ -20,8 +20,6 @@
 #include <algorithm>
 #include <iostream>
 
-#include "common.h"
-
 #define DEFAULT_PORT 1250
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
@@ -30,6 +28,8 @@
 #include <SDL_ttf.h>
 #include <SDL_image.h>
 #include <SDL_mixer.h>
+
+#include "common.h"
 
 #include "render.cpp"
 #include "audio.cpp"
@@ -95,8 +95,8 @@ static void GameGUIStart() {
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
     init_sfx();
+    m5x7 = TTF_OpenFont("../res/m5x7.ttf",16);
     
-    TTF_Font *mFont = TTF_OpenFont("../res/m5x7.ttf",16);
 
     bool running=true;
 
@@ -137,8 +137,13 @@ static void GameGUIStart() {
     // delay it by 10 ticks, so 1/6 of a second
 
     // health text
-    generic_drawable health_text = generate_text(sdl_renderer,mFont,"100",{255,0,0,255});
+    generic_drawable health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
     health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
+
+    int connected_last_tick = client_st.gms.connected_players;
+
+    client_st.gms.state = GMS::PREGAME_SCREEN;
+
     
     while (running) {
         // input
@@ -155,33 +160,52 @@ static void GameGUIStart() {
             printf("Tick %d\n",target_tick);
         }
 
-        update_player_controller(player,target_tick);
-        //if (gs.tick < target_tick)
-        //load_game_state_up_to_tick(gs,client_st.NetState,target_tick,false);
-        bool update_health_display=false;
-        int p_health_before_update = player ? player->health : 0;
+        if (client_st.gms.state == GMS::ROUND_PLAYING) {
 
-        while(gs.tick<target_tick) {
-            gs.update(client_st.NetState,tick_delta);
-            gs.tick++;
-            tick_clock.start_time += tick_delta;
+            update_player_controller(player,target_tick);
+            //if (gs.tick < target_tick)
+            //load_game_state_up_to_tick(gs,client_st.NetState,target_tick,false);
+            bool update_health_display=false;
+            int p_health_before_update = player ? player->health : 0;
+
+            while(gs.tick<target_tick) {
+                gs.update(client_st.NetState,tick_delta);
+                gs.tick++;
+                tick_clock.start_time += tick_delta;
+            }
+            if (player && player->health != p_health_before_update) {
+                health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
+                health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
+            }
+
+            if (input_send_clock.getElapsedTime() > input_send_delta) {
+                client_send_input(target_tick);
+                input_send_clock.start_time += input_send_delta;
+            }
+            render_game_state(sdl_renderer);
+            // gui
+            SDL_RenderCopy(sdl_renderer,health_text.texture,NULL,&health_text.get_draw_rect());
+        } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
+            // if the clock runs out, start the game
+            if (client_st.gms.game_start_time != 0) {
+                if (client_st.gms.game_start_time - client_st.sync_clock.getElapsedTime() <= 0) {
+                    // game_start
+                    client_st.gms.state = GMS::ROUND_PLAYING;
+                    tick_clock.start_time = client_st.gms.game_start_time;
+                    goto endof_frame;
+                }
+            }
+            render_pregame_screen(sdl_renderer,client_st.gms,client_st.sync_clock.getElapsedTime());
         }
-        if (player && player->health != p_health_before_update) {
-            health_text = generate_text(sdl_renderer,mFont,std::to_string(player->health),{255,0,0,255});
-            health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
-        }
-
-        if (input_send_clock.getElapsedTime() > input_send_delta) {
-            client_send_input(target_tick);
-            input_send_clock.start_time += input_send_delta;
-        }
-
-
-        render_game_state(sdl_renderer);
-        // gui
-        SDL_RenderCopy(sdl_renderer,health_text.texture,NULL,&health_text.get_draw_rect());
+endof_frame:
         
         SDL_RenderPresent(sdl_renderer);
+        
+        // sleep until next tick
+        int sleep_time = (int)(client_st.get_time_to_next_tick()*1000.0) - 2;
+        if (sleep_time > 3) {
+            Sleep((DWORD)(sleep_time));
+        }
     }
     
     SDL_DestroyRenderer(sdl_renderer);
