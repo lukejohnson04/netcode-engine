@@ -1,2 +1,10 @@
-fix player/client id to make it just one number
-OR make it more explicit why it matters
+TODO:
+
+The client is receiving snapshots slightly into the future. This should never happen!
+When removing the sleep commands this works fine. One option is increasing snapshot buffer, but that's not ideal, we need to get to the bottom of the problem!
+
+TODO:
+
+convert game_start_time to a LARGE_INTEGER, fix rubber banding and weird delays
+
+timer is 100% synced tho! at least!!!

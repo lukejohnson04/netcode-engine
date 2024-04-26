@@ -38,9 +38,8 @@ struct overall_game_manager {
     i32 score[8] = {0};
     int round_end_tick=-1;
 
-    double game_start_time=0.0;
-
-    double timer=0.0;
+    LARGE_INTEGER game_start_time;
+    bool counting_down_to_game_start=false;
 };
 
 
@@ -55,12 +54,16 @@ struct netstate_info_t {
     bool authoritative=false;
     int interp_delay=0;
 
-    void add_snapshot(game_state gs) {
-        for (game_state &snap:snapshots) {
-            if (snap.tick == gs.tick) {
-                printf("WARNING: Overwriting snapshot at tick %d",gs.tick);
-                snap = gs;
-                return;
+    void add_snapshot(game_state gs, bool authoritative=false, int curr_tick=0, int snapshot_buffer=0) {
+        if (authoritative) {
+            for (game_state &snap: snapshots) {
+                if (snap.tick == gs.tick) {
+                    if (gs.tick < curr_tick-snapshot_buffer) {
+                        printf("WARNING: Overwriting snapshot at tick %d",gs.tick);
+                    }
+                    snap = gs;
+                    return;
+                }
             }
         }
         snapshots.push_back(gs);
@@ -127,40 +130,16 @@ void game_state::update(netstate_info_t &c, double delta) {
     
 
     // interp delay in ticks
-    int interp_delay = c.interp_delay;
+    int interp_delay = 6;//c.interp_delay;
     int interp_players=0;
     int interp_tick=tick-interp_delay;
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
-        if (c.do_charas_interp[obj->id] && !c.authoritative) {
-            interp_players++;
-            game_state *prev_snap=nullptr;
-            game_state *next_snap=nullptr;
-
-            for (auto &snap:c.snapshots) {
-                if (snap.tick<interp_tick) {
-                    prev_snap = &snap;
-                } else if (snap.tick>=interp_tick) {
-                    next_snap = &snap;
-                    break;
-                }
-            }
-
-            if (next_snap && prev_snap) {
-                v2 prev_pos = prev_snap->players[obj->id].pos;
-                v2 next_pos = next_snap->players[obj->id].pos;
-                float f = (float)(interp_tick-prev_snap->tick) / (float)(next_snap->tick-prev_snap->tick);
-                obj->pos = lerp(prev_pos,next_pos,f);
-                
-            } else {
-                printf("No snapshots to interpolate between for %d\n",obj->id);
-            }
+        if (c.do_charas_interp[obj->id] && !c.authoritative && c.snapshots.size() > 0) {
+            
         } else {
             update_player(obj,delta,wall_count,walls,player_count,players);
         }
-    }
-    if (!c.authoritative && player_count > 1 && interp_players == 0) {
-        printf("Not interpolating at all!\n");
     }
 
     FOR(bullets,bullet_count) {
@@ -229,7 +208,7 @@ void render_game_state(SDL_Renderer *sdl_renderer) {
 
 }
 
-void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms, double curr_time) {
+void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms, double time_to_start) {
     static int connected_last_tick=-1;
     static generic_drawable connection_text = generate_text(sdl_renderer,m5x7,"Players connected (" + std::to_string(connected_last_tick) + "/2)",{255,255,200});
     connection_text.scale = {2,2};
@@ -247,9 +226,8 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
     SDL_RenderCopy(sdl_renderer,textures[PREGAME_TEXTURE],NULL,&dest);
     SDL_RenderCopy(sdl_renderer,connection_text.texture,NULL,&connection_text.get_draw_rect());
 
-    if (gms.game_start_time != 0.0) {
-        double time_till_start = gms.game_start_time - curr_time;
-        std::string str = std::to_string(time_till_start);
+    if (gms.counting_down_to_game_start) {
+        std::string str = std::to_string(time_to_start);
         if (str.size() > 4) {
             str.erase(str.begin()+4,str.end());
         }
@@ -274,8 +252,6 @@ void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int s
 
 void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_tick, bool overwrite_snapshots=true) {
     while(gs.tick<target_tick) {
-        gs.update(c,1.0/60.0);
-        gs.tick++;
         // should this be before or after???
         // after i think because this function shouldn't have to worry about previous ticks
         // crazy inefficient lol
@@ -287,6 +263,9 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
                 }
             }
         }
+        gs.update(c,1.0/60.0);
+        gs.tick++;
+
     }
 }
 

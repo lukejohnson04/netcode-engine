@@ -20,10 +20,12 @@
 #include <algorithm>
 #include <iostream>
 
-#define DEFAULT_PORT 1250
+#define DEFAULT_PORT 13172
+#define DEFAULT_IP "127.0.0.1"
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
 #define SDL_MAIN_HANDLED
+
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include <SDL_image.h>
@@ -86,7 +88,7 @@ static void GameGUIStart() {
 
     SDL_Renderer* sdl_renderer;
 
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
     if (sdl_renderer == nullptr) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         return;
@@ -100,13 +102,10 @@ static void GameGUIStart() {
 
     bool running=true;
 
-    gs.time = client_st.server_time_on_connection;
-    double start_time = client_st.sync_timer.get();
-    // fix this time shit lol
     
     client_st.init_ok=true;
 
-    int input_send_hz=30;
+    int input_send_hz=60;
     int tick_hz=60;
     int frame_hz=0; // uncapped framerate
     double tick_delta=(1.0/tick_hz);
@@ -116,25 +115,10 @@ static void GameGUIStart() {
     // currently we have the server time and the last tick
     // but we aren't sure how long ago the last tick was
 
-    timer_t global_timer;
-    global_timer.Start();
+    timer_t input_send_timer;
+    input_send_timer.Start();
 
-    r_clock_t tick_clock(global_timer);
-    r_clock_t input_send_clock(global_timer);
-    tick_clock.start_time -= client_st.sync_timer.get() - client_st.time_of_last_tick_on_connection;
-    r_clock_t ping_clock(global_timer);
-
-    int target_tick=client_st.last_tick;
-    
-    add_wall({5,3});
-    add_wall({6,3});
-    add_wall({7,3});
-    add_wall({8,3});
-    add_wall({5,5});
-    add_wall({6,7});
-
-    gs.players[client_st.client_id].cmd_interp = 0;
-    // delay it by 10 ticks, so 1/6 of a second
+    int target_tick=0;
 
     // health text
     generic_drawable health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
@@ -143,69 +127,149 @@ static void GameGUIStart() {
     int connected_last_tick = client_st.gms.connected_players;
 
     client_st.gms.state = GMS::PREGAME_SCREEN;
-
     
     while (running) {
         // input
         PollEvents(&input,&running);
-
         character *player=nullptr;
         if (gs.players[client_st.client_id].id != ID_DONT_EXIST) {
             player = &gs.players[client_st.client_id];
         }
 
-        int o_num=target_tick;
-        target_tick = client_st.get_exact_current_server_tick();
-        if (o_num != target_tick) {
-            printf("Tick %d\n",target_tick);
-        }
-
         if (client_st.gms.state == GMS::ROUND_PLAYING) {
-
             update_player_controller(player,target_tick);
-            //if (gs.tick < target_tick)
-            //load_game_state_up_to_tick(gs,client_st.NetState,target_tick,false);
+            if (client_snapshot_buffer_stack.size() > 0) {
+                for (auto &snap:client_snapshot_buffer_stack) {
+                    client_st.NetState.snapshots.push_back(snap);
+                }
+                std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
+                client_snapshot_buffer_stack.clear();
+            }
+            if (load_new_snapshot) {
+                gs = new_snapshot;
+                load_new_snapshot=false;
+                printf("Loaded snapshot\n");
+            }
+            
             bool update_health_display=false;
             int p_health_before_update = player ? player->health : 0;
 
+            int o_num=target_tick;
+            target_tick = client_st.get_exact_current_server_tick();
+            
             while(gs.tick<target_tick) {
                 gs.update(client_st.NetState,tick_delta);
                 gs.tick++;
-                tick_clock.start_time += tick_delta;
             }
+            // interpolate
+            if (client_st.NetState.snapshots.size() > 0) {
+                int interp_tick = target_tick-client_st.NetState.interp_delay;
+                game_state *prev_snap=nullptr;
+                game_state *next_snap=nullptr;
+                game_state *exac_snap=nullptr;
+
+                if (client_st.NetState.snapshots.back().tick < interp_tick) {
+                    printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,client_st.NetState.snapshots.back().tick);
+                }
+                // actually, this whole process of lerping is a little pointless when we have 60 snapshots a second
+                // cause we don't actually lerp at all unless there's packet loss... we just set it to one snapshot
+                // position and then the next frame set it to the next
+
+                // this whole process of finding interp snapshots only needs to be done once for all players btw
+                for (i32 ind=(i32)client_st.NetState.snapshots.size()-1;ind>=0;ind--){
+                    game_state &snap = client_st.NetState.snapshots[ind];
+                
+                    if (snap.tick == interp_tick) {
+                        exac_snap=&snap;
+                        break;
+                    } else if (snap.tick>interp_tick) {
+                        next_snap = &snap;
+                
+                    } else if (snap.tick<interp_tick) {
+                        prev_snap = &snap;
+                        break;
+                    }
+                }
+                if (!exac_snap && (!next_snap || !prev_snap)){
+                    printf("No snapshots to interpolate between\n");
+                } else {
+
+
+                    FORn(gs.players,gs.player_count,chara) {
+                        if (chara==player) {
+                            continue;
+                        }
+                        if (exac_snap) {
+                            chara->pos = exac_snap->players[chara->id].pos;
+                        } else if (next_snap && prev_snap) {
+                            v2 prev_pos = prev_snap->players[player->id].pos;
+                            v2 next_pos = next_snap->players[player->id].pos;
+                            float f = (float)(interp_tick-prev_snap->tick) / (float)(next_snap->tick-prev_snap->tick);
+                            player->pos = lerp(prev_pos,next_pos,f);
+                        }
+                    }
+                }
+            }
+            last_tick_processed_in_client_loop=target_tick;
+            
             if (player && player->health != p_health_before_update) {
                 health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
                 health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
             }
 
-            if (input_send_clock.getElapsedTime() > input_send_delta) {
-                client_send_input(target_tick);
-                input_send_clock.start_time += input_send_delta;
+            if (o_num != target_tick) {
+                printf("Tick %d\n",target_tick);
+                if (input_send_timer.get() > input_send_delta) {
+                    client_send_input(target_tick);
+                    input_send_timer.add(input_send_delta);
+                }
             }
+
             render_game_state(sdl_renderer);
             // gui
             SDL_RenderCopy(sdl_renderer,health_text.texture,NULL,&health_text.get_draw_rect());
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
-            if (client_st.gms.game_start_time != 0) {
-                if (client_st.gms.game_start_time - client_st.sync_clock.getElapsedTime() <= 0) {
+            double time_to_start=0.0;
+            if (client_st.gms.counting_down_to_game_start) {
+                if (client_st.gms.game_start_time.QuadPart - client_st.sync_timer.get_high_res_elapsed().QuadPart <= 0) {
                     // game_start
                     client_st.gms.state = GMS::ROUND_PLAYING;
-                    tick_clock.start_time = client_st.gms.game_start_time;
+                    client_st.gms.counting_down_to_game_start=false;
+                    input_send_timer.Restart();
+
+                    // setup interp settings
+                    for (i32 ind=0; ind<client_st.gms.connected_players; ind++) {
+                        client_st.NetState.do_charas_interp[ind] = true;
+                    }
+                    client_st.NetState.do_charas_interp[client_st.client_id] = false;
+                    
                     goto endof_frame;
                 }
+                time_to_start = static_cast<double>(client_st.gms.game_start_time.QuadPart - client_st.sync_timer.get_high_res_elapsed().QuadPart)/client_st.sync_timer.frequency.QuadPart;
             }
-            render_pregame_screen(sdl_renderer,client_st.gms,client_st.sync_clock.getElapsedTime());
+        
+            render_pregame_screen(sdl_renderer,client_st.gms,time_to_start);
         }
+
 endof_frame:
         
         SDL_RenderPresent(sdl_renderer);
         
         // sleep until next tick
-        int sleep_time = (int)(client_st.get_time_to_next_tick()*1000.0) - 2;
-        if (sleep_time > 3) {
-            Sleep((DWORD)(sleep_time));
+
+        // when you don't sleep, it works fine?!?!
+        /*
+        if (client_st.gms.state == GMS::ROUND_PLAYING) {
+            double time_to_next_tick=client_st.get_time_to_next_tick();
+            DWORD sleep_time = (DWORD)(time_to_next_tick*1000);
+            if (sleep_time > 3) {
+                printf("%d\n",sleep_time);
+                SDL_Delay(sleep_time);
+            }
         }
+        */
+        
     }
     
     SDL_DestroyRenderer(sdl_renderer);
@@ -228,15 +292,16 @@ int main(int argc, char *argv[]) {
     
     if (argc > 1 && !strcmp(argv[1], "client")) {
         int port = DEFAULT_PORT;
+        std::string ip_addr=DEFAULT_IP;
         if (argc < 2) {
             fprintf(stderr, "not enough args!");
             return -1;
         } if (argc == 3) {
             sscanf_s(argv[2], "%d", &port);
+        } if (argc == 4) {
+            ip_addr = std::string(argv[3]);
         }
-
-        
-        client_connect(port);
+        client_connect(port,ip_addr);
     } else {
         server();
     }

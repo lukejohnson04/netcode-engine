@@ -67,10 +67,13 @@ struct packet_t {
 
         struct {
             entity_id id;
-            double server_time;
-            double time_of_last_tick;
-            int last_tick;
+            //double server_time;
+            //double time_of_last_tick;
+            LARGE_INTEGER t_1;
+            LARGE_INTEGER t_2;
+            //int last_tick;
             server_header_t server_header;
+
         } connection_dump;
 
         struct {
@@ -81,23 +84,28 @@ struct packet_t {
             i32 client_count=0;
         } info_dump_on_connected;
 
-        double game_start_time;
+        LARGE_INTEGER game_start_time;
         
         overall_game_manager gms;
         
         game_state snapshot;
+
+        struct {
+            i32 count;
+            game_state snapshots[6];
+        } snap_data;
 
         command_t command;
     } data;
 };
 
 
-int send_packet(int socket, sockaddr_in *addr, packet_t *p) {
+inline int send_packet(int socket, sockaddr_in *addr, packet_t *p) {
     return sendto(socket, (char*)p, sizeof(packet_t), 0,
                   (sockaddr*)addr, sizeof(*addr));
 }
 
-int recieve_packet(int socket, sockaddr_in *addr, packet_t *p) {
+inline int recieve_packet(int socket, sockaddr_in *addr, packet_t *p) {
     socklen_t addr_len = sizeof(*addr);
     return recvfrom(socket, (char*)p, sizeof(packet_t), 0,
                     (struct sockaddr *)addr, &addr_len);
@@ -105,15 +113,26 @@ int recieve_packet(int socket, sockaddr_in *addr, packet_t *p) {
 
 struct timer_t {
     LARGE_INTEGER start_time,frequency;
+    LARGE_INTEGER temp_offset;
 
-    void Start() {
+    timer_t() {
         if (!QueryPerformanceFrequency(&frequency)) {
             std::cerr << "High-resolution performance counter not supported." << std::endl;
             return;
         }
+    }
+
+    void Start() {
         QueryPerformanceCounter(&start_time);
     }
 
+    inline LARGE_INTEGER get_high_res_elapsed() {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        end.QuadPart -= start_time.QuadPart;
+        return end;
+    }
+    
     double get() {
         LARGE_INTEGER end;
         QueryPerformanceCounter(&end);
@@ -121,19 +140,19 @@ struct timer_t {
         return static_cast<double>(end.QuadPart - start_time.QuadPart) / frequency.QuadPart;
     }
 
+    void add(double time) {
+        start_time.QuadPart += static_cast<LONGLONG>(time)*frequency.QuadPart;
+    }
+
     void Restart() {
         QueryPerformanceCounter(&start_time);
     }
-
-    double Tick() {
-        double val = get();
-        Restart();
-        return val;
-    }
 };
 
+
+
 // clock_t records time relative to a global clock;
-struct r_clock_t {
+/*struct r_clock_t {
 
     r_clock_t(timer_t &t) : m_timer(t) {
         start_time = m_timer.get();
@@ -152,3 +171,4 @@ struct r_clock_t {
 private:
     timer_t &m_timer;
 };
+*/

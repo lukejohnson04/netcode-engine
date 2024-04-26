@@ -1,47 +1,44 @@
 
 
 struct client_t {
-    client_t() : sync_clock(sync_timer) {}
     u32 client_id=ID_DONT_EXIST;
     int socket;
     sockaddr_in servaddr;
 
-    double server_time_on_connection;
-    double local_time_on_connection;
-    double time_of_last_tick_on_connection;
     double ping=0;
 
     // sync_clock getElapsedTime returns the exact time since the SERVER started
     timer_t sync_timer;
-    r_clock_t sync_clock;
-    int last_tick;
+    //r_clock_t sync_clock;
+    //int last_tick;
     
-    double global_time_of_last_ping;
-
     netstate_info_t NetState;
     std::vector<command_t> command_history;
 
     overall_game_manager gms;
 
-    struct {
+    /*
+      struct {
         entity_id player_id=ID_DONT_EXIST;
     } game_data;
+    */
 
     bool init_ok=false;
     // delay
     server_header_t server_header;
 
     int get_exact_current_server_tick() {
-        // time since we connected
-        double elapsed = sync_clock.getElapsedTime();
+        // subtract the time the game started at
+        double elapsed = static_cast<double>(sync_timer.get_high_res_elapsed().QuadPart - gms.game_start_time.QuadPart)/sync_timer.frequency.QuadPart;
         int ticks_elapsed = (int)floor(elapsed / (1.0/60.0));
         return ticks_elapsed;
     }
 
     double get_time_to_next_tick() {
-        double elapsed = sync_clock.getElapsedTime();
-        double next_tick = (int)floor(elapsed/(1.0/60.0)) + 1;
-        return (next_tick*(1.0/60.0))-elapsed;
+        int next_tick = get_exact_current_server_tick()+1;
+        LARGE_INTEGER next_tick_time;
+        next_tick_time.QuadPart = gms.game_start_time.QuadPart + (next_tick*sync_timer.frequency.QuadPart/60);
+        return static_cast<double>(next_tick_time.QuadPart-sync_timer.get_high_res_elapsed().QuadPart)/sync_timer.frequency.QuadPart;
     }
 };
 
@@ -52,9 +49,11 @@ global_variable client_t client_st={};
 //    return cl.server_time_on_connection + ((i64)SDL_GetTicks64() - cl.local_time_on_connection);
 //}
 
-static inline double client_time_to_server_time(client_t cl) {
+/*
+  static inline double client_time_to_server_time(client_t cl) {
     return cl.server_time_on_connection + cl.sync_timer.get() - cl.ping;
 }
+*/
 
 static void add_command_to_recent_commands(command_t cmd) {
     client_st.NetState.command_buffer.push_back(cmd);
@@ -75,6 +74,11 @@ static void command_callback(character *player, command_t cmd) {
 }
 
 
+int last_tick_processed_in_client_loop=0;
+game_state new_snapshot;
+bool load_new_snapshot=false;
+std::vector<game_state> client_snapshot_buffer_stack;
+
 DWORD WINAPI ClientListen(LPVOID lpParamater) {
     const int connect_socket = *(int*)lpParamater;
     printf("Thread started!\n\r");
@@ -93,12 +97,8 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 
         } else if (pc.type == ADD_PLAYER) {
             gs.players[gs.player_count++] = pc.data.new_player;
-            if (pc.data.new_player.id == client_st.client_id) {
-                client_st.game_data.player_id = client_st.client_id;
-            } else {
-                client_st.NetState.do_charas_interp[pc.data.new_player.id] = true;
-            }
             client_st.gms.connected_players++;
+
         } else if (pc.type == INFO_DUMP_ON_CONNECTED) {
             client_st.gms.connected_players=pc.data.info_dump_on_connected.client_count;
             client_st.client_id = client_st.gms.connected_players-1;
@@ -108,24 +108,39 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             printf("changing from %d players to %d players\n", gs.player_count, pc.data.full_info_dump.p_count);
             gs = pc.data.snapshot;
             client_st.gms.connected_players=gs.player_count;
-            
-            if (gs.player_count-1 >= (i32)client_st.client_id) {
-                client_st.game_data.player_id = (i32)client_st.client_id;
-            }
-            
+                        
         } else if (pc.type == SNAPSHOT_DATA) {
-            client_st.NetState.snapshots.push_back(pc.data.snapshot);
-            //if (client_st.NetState.snapshots.front().tick < gs.tick) {
-            int curr_tick=gs.tick;
-            if (pc.data.snapshot.tick<=gs.tick) {
-                gs = pc.data.snapshot;
-                // this wont work for client because we only have commands for the local player
+            // mutex this
+            client_snapshot_buffer_stack.push_back(pc.data.snapshot);
+
+            //std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
+            int server_tick = client_st.get_exact_current_server_tick();
+            
+            if (pc.data.snapshot.tick <= last_tick_processed_in_client_loop) {
+                // should we also check if the snapshot is greater than the current gs tick?
+                // because that way if we receive two snapshots between client ticks we would
+                // load the second snapshot
+                //gs = pc.data.snapshot;
+                load_new_snapshot=true;
+                new_snapshot = pc.data.snapshot;
+
+                // dont do this update loop because we could skip past the immediate next tick that
+                // we otherwise would have updated on in the main update loop
+                /*
                 
-                // load_game_state_up_to_tick(gs,client_st.NetState,curr_tick,false);
+                while(gs.tick<server_tick) {
+                    gs.update(client_st.NetState,1.0/60.0);
+                    gs.tick++;
+                }
+                */                
+
+            } else {
+                printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot.tick,gs.tick,server_tick);
             }
 
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {
             client_st.gms.game_start_time = pc.data.game_start_time;
+            client_st.gms.counting_down_to_game_start=true;
 
         } else if (pc.type == COMMAND_DATA) {
             continue;
@@ -160,7 +175,7 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 }
 
 static void GameGUIStart();
-static void client_connect(int port) {
+static void client_connect(int port,std::string ip_addr) {
     if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
         return;
@@ -172,17 +187,20 @@ static void client_connect(int port) {
         exit(EXIT_FAILURE);
     }
 
+    
     sockaddr_in servaddr;
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons((short) port);
-    servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    servaddr.sin_addr.s_addr = inet_addr(ip_addr.c_str());
 
     // connection request
     packet_t p = {};
     p.type = CONNECTION_REQUEST;
 
+
     client_st.sync_timer.Start();
-    client_st.sync_clock.start_time = client_st.sync_timer.get();
+    LARGE_INTEGER t_0=client_st.sync_timer.get_high_res_elapsed();
+
     int ret = send_packet(connect_socket,&servaddr,&p);
 
     // default interpolation delay - 100ms with default tickrate of 60
@@ -195,33 +213,36 @@ static void client_connect(int port) {
     
     p = {};
     ret = recieve_packet(connect_socket,&servaddr,&p);
+
+    LARGE_INTEGER t_3=client_st.sync_timer.get_high_res_elapsed();
+
     if (p.type == CONNECTION_ACCEPTED) {
-        client_st.local_time_on_connection = client_st.sync_timer.get();
-        double time_since_request_to_server_was_sent = client_st.sync_clock.getElapsedTime();
+        //client_st.local_time_on_connection = client_st.sync_timer.get();
+        LARGE_INTEGER t_1 = p.data.connection_dump.t_1;
+        LARGE_INTEGER t_2 = p.data.connection_dump.t_2;
+        LARGE_INTEGER time_offset;
+        time_offset.QuadPart = ((t_1.QuadPart - t_0.QuadPart) + (t_2.QuadPart - t_3.QuadPart)) / 2;
+        LARGE_INTEGER ping;
+        ping.QuadPart = (t_3.QuadPart - t_0.QuadPart) - (t_2.QuadPart - t_1.QuadPart);
 
-        client_st.ping = time_since_request_to_server_was_sent * 1000.0;
+        client_st.ping = static_cast<double>(ping.QuadPart) / client_st.sync_timer.frequency.QuadPart;
+        client_st.ping *= 1000;
+        LARGE_INTEGER curr_server_time;
+        curr_server_time.QuadPart = t_2.QuadPart + ping.QuadPart/2;
+        // dest start_time is whatever makes it so t_3 + start_time = curr_server_time
+        
+        client_st.sync_timer.start_time.QuadPart -= curr_server_time.QuadPart - t_3.QuadPart;
+
         client_st.client_id = p.data.connection_dump.id;
-        client_st.server_time_on_connection = p.data.connection_dump.server_time;
-        // subtract half of ping from this!
         client_st.server_header = p.data.connection_dump.server_header;
-        client_st.time_of_last_tick_on_connection=p.data.connection_dump.time_of_last_tick;
-        client_st.NetState.do_charas_interp[client_st.client_id]=false;
-        client_st.last_tick=p.data.connection_dump.last_tick;
-        // is this correct..?
-        client_st.sync_clock.start_time -= (client_st.server_time_on_connection);//+(time_since_request_to_server_was_sent/2.0));
 
-        client_st.NetState.interp_delay = MAX(6,4 + (int)ceil((client_st.ping) / ((1000.0)*(1.0/60.0))));
+        // whatever is higher - 6 or 4 ticks plus the amount of ticks of ping you have
+        client_st.NetState.interp_delay = MAX(6,4 + (int)ceil(((client_st.ping/1000.0)/2.0)/(1.0/60.0) * 1.75));
+        printf("Interp delay of %d\n",client_st.NetState.interp_delay);
 
         printf("Connection accepted\n");
         printf("Client id is %d with ping %f\n",client_st.client_id,client_st.ping);
         
-        //packet_t res = {};
-        //res.type = PING;
-        //res.data.ping_dump.server_time_on_accept = client_st.connection_time_server;
-        //send_packet(connect_socket,&servaddr,&res);
-
-        //printf("Server time on connection: %lld\n", client_st.server_time_on_connection);
-        //printf("Server time currently: %d", client_st.connection_server + (SDL_GetTicks() - client_st.connection_time_client));
     } else if (p.type == CONNECTION_DENIED) {
         printf("Connection denied\n");
         return;
@@ -261,8 +282,12 @@ static void client_send_input(int curr_tick) {
     
     p.data.command_data.count = 0;
 
-    // send last 250ms of commands
-    p.data.command_data.start_time = curr_tick-15;
+    // right now its possible to send inputs from the current tick, but then add more inputs on the next
+    // client tick. Then, you update it during the client tick with the extra input. This could be the
+    // cause of rubber banding
+
+    // send last x ticks worth of commands
+    p.data.command_data.start_time = curr_tick-20;
     p.data.command_data.end_time = curr_tick;
 
     client_st.command_history.insert(client_st.command_history.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());

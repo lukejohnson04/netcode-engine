@@ -11,8 +11,6 @@ struct server_t {
     sockaddr_in clients[MAX_CLIENTS];
     u32 client_count=0;
     int socket=-1;
-    double time;
-    double last_tick_time;
     int last_tick;
 
     server_client_t s_clients[MAX_CLIENTS];
@@ -23,9 +21,17 @@ struct server_t {
     server_header_t header;
     timer_t timer;
 
+    std::vector<int> dropped_command_times;
+
     overall_game_manager gms;
 
     void start_game();
+
+    int get_target_tick() {
+        double elapsed = static_cast<double>(timer.get_high_res_elapsed().QuadPart - gms.game_start_time.QuadPart)/timer.frequency.QuadPart;
+        int ticks_elapsed = (int)floor(elapsed / (1.0/60.0));
+        return ticks_elapsed;
+    }
 };
 
 global_variable server_t gl_server;
@@ -41,6 +47,8 @@ internal void broadcast(packet_t *p) {
 // The client is recording inputs based on the gamestate ticks, and the functions to update
 // the gamestate have not yet been updated to the newer versions
 // Might be optimal to switch to a target tick for the client as well
+
+int last_sent_snapshot_tick=0;
 
 DWORD WINAPI ServerListen(LPVOID lpParamater) {
     const int &connect_socket = gl_server.socket;
@@ -59,6 +67,8 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
         if (p.type == MESSAGE) {
             printf("%s\n",p.data.msg);
         } else if (p.type == CONNECTION_REQUEST) {
+            LARGE_INTEGER t_1=gl_server.timer.get_high_res_elapsed();
+            
             in_addr client_ip_addr;
             memcpy(&client_ip_addr, &clientaddr.sin_addr.s_addr, 4);
             printf("IP address of client = %s  port = %d) \n", inet_ntoa(client_ip_addr),
@@ -66,22 +76,13 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             packet_t res = {};
             res.type = CONNECTION_ACCEPTED;
             res.data.connection_dump.id = gl_server.client_count;
-            res.data.connection_dump.server_time = gl_server.timer.get();
-            res.data.connection_dump.server_header = gl_server.header;
-            res.data.connection_dump.time_of_last_tick = gl_server.last_tick_time;
-            res.data.connection_dump.last_tick = gl_server.last_tick;
+
+            LARGE_INTEGER t_2 = gl_server.timer.get_high_res_elapsed();
+
+            res.data.connection_dump.t_1 = t_1;
+            res.data.connection_dump.t_2 = t_2;
             
             send_packet(connect_socket,&clientaddr,&res);
-
-            /*
-            if (gl_server.gms.state != GMS::GAME_HASNT_STARTED && gl_server.gms.state != GMS::PREGAME_SCREEN) {
-                packet_t gs_full_info = {};
-                gs_full_info.type = GS_FULL_INFO;
-                gs_full_info.data.snapshot = gl_server.NetState.snapshots.back();
-            
-                send_packet(connect_socket,&clientaddr,&gs_full_info);
-            }
-            */
 
             gl_server.s_clients[gl_server.client_count].addr = clientaddr;
             gl_server.clients[gl_server.client_count++] = clientaddr;
@@ -110,14 +111,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             packet_t p = {};
             p.type = PING;
             send_packet(connect_socket,&clientaddr,&p);
-
-            /*
-            // ping after first connect
-            server_client_t &cl = gl_server.s_clients[gl_server.client_count];
-            cl.connection_time = p.data.ping_dump.server_time_on_accept;
-            cl.ping = SDL_GetTicks() - cl.connection_time;
-            */
-            // realistically should send the ping back..?
+            
         } else if (p.type == COMMAND_DATA) {
             if (p.data.command_data.count==0) {
                 continue;
@@ -125,22 +119,20 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
             // disregard any command more than 20 ticks old
             if (p.data.command_data.end_time < gl_server.last_tick - 20) {
+                printf("Received out of date commands!\n");
                 continue;
             }
+
+            // check if we just received some BRAND NEW commands that are too old to use
             
             for (i32 n=0;n<p.data.command_data.count;n++) {
                 command_t &cmd = p.data.command_data.commands[n];
-                if (cmd.tick < gl_server.last_tick - 20) {
-                    continue;
-                }
                 
                 if (std::find(gl_server.NetState.command_stack.begin(),gl_server.NetState.command_stack.end(),cmd)==gl_server.NetState.command_stack.end()) {
                     if (std::find(gl_server.NetState.command_buffer.begin(),gl_server.NetState.command_buffer.end(),cmd)==gl_server.NetState.command_buffer.end()) {
                         gl_server.NetState.command_buffer.push_back(cmd);
                     }
                 }
-                
-                //gl_server.NetState.command_buffer.push_back(cmd);
             }
             
             std::vector<command_t> &buf=gl_server.NetState.command_buffer;
@@ -160,11 +152,16 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
             // dont rewind state it doesnt run
             // update to past (present - 2 seconds for example) and it runs fine but out of sync
-            if (first_cmd.tick < gs.tick) {
+            if (first_cmd.tick < last_sent_snapshot_tick) {
+                printf("Error: received command for tick %d but snapshot %d has been sent!\n",first_cmd.tick,last_sent_snapshot_tick);
+                gl_server.dropped_command_times.push_back(gs.tick);
+            } else if (first_cmd.tick < gs.tick) {
                 //int curr=gs.tick;
                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,first_cmd.tick);
                 //load_game_state_up_to_tick(gs,gl_server.NetState,curr);
             }
+        } else {
+            printf("Erm.. Discharge alert!! XD\n");
         }
     }
     return 0;
@@ -230,7 +227,7 @@ static void server() {
     for (i32 ind=0; ind<16; ind++) {
         gl_server.NetState.do_charas_interp[ind]=false;
     }
-    
+
 
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
@@ -273,18 +270,17 @@ static void server() {
 
     bool running=true;
 
-    r_clock_t tick_clock(gl_server.timer);
-    r_clock_t snap_clock(gl_server.timer);
+    //r_clock_t tick_clock(gl_server.timer);
+    //r_clock_t snap_clock(gl_server.timer);
+    timer_t snap_clock;
+    snap_clock.Start();  
 
-    int input_polling_send_hz=30;
     double tick_hz=60;
     double snap_hz=60;
-    int frame_hz=0; // uncapped framerate
     double tick_delta=(1.0/tick_hz);
     double snap_delta=(1.0/snap_hz);
 
     gl_server.last_tick=0;
-    gl_server.last_tick_time=gl_server.timer.get();
     gl_server.NetState.authoritative=true;
     gl_server.gms.state = GAME_HASNT_STARTED;
 
@@ -292,64 +288,101 @@ static void server() {
     // a built in latency or not
     // e.g. when sending a snapshot do they send the latest or the one from 2 snapshots ago, so it
     // never sends an incorrect snapshots?
-    int snapshot_buffer=0;
+    
+    // base the snapshot buffer off of the ping of the players
+    // make the snapshot buffer greater if some of the players have very high ping
+    int snapshot_buffer=7;
     int target_tick=0;
+    // interp delay on clients should always be below the snapshot buffer on the server
 
+    // TODO:
+    // lower snapshot rate significantly
     
     // tick thread
     while (running) {
         PollEvents(&input,&running);
-        while(tick_clock.getElapsedTime() > tick_delta) {
-            target_tick++;
-            tick_clock.start_time += tick_delta;
-            gl_server.last_tick_time+=tick_delta;
-        }
-        gl_server.last_tick=target_tick;
+        bool new_frame_ready=false;
 
         if (gl_server.gms.state == GMS::ROUND_PLAYING) {
-            if (snap_clock.getElapsedTime() > snap_delta) {
-                snap_clock.start_time += snap_delta;
-                //snap_clock.Restart();
-                load_game_state_up_to_tick(gs,gl_server.NetState,target_tick);
+            target_tick = gl_server.get_target_tick();
+            gl_server.last_tick=target_tick;
+
+            /*
+            auto &cmd=gl_server.dropped_command_times.begin();
+            while (cmd!=gl_server.dropped_command_times.end()) {
+                if (cmd<target_tick-8*tick_hz) {
+                    cmd=gl_server.dropped_command_times.erase(cmd);
+                } else {
+                    cmd++;
+                }
+            }
+            if (gl_server.dropped_command_times.size() > 10) {
+                snapshot_buffer=5;
+            } else if (gl_server.dropped_command_times.size() > 20) {
+                snapshot_buffer=6;
+            }
+            */
+
+            if (snap_clock.get() > snap_delta) {
+                snap_clock.Restart();
+                load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
                 
-                gl_server.NetState.add_snapshot(gs);
+                gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
+
+                // send the last 6 ticks worth of snapshots
+                // that way the server doesn't need to buffer any snapshots, and the client just overwrites
+                // the latest snapshots they have with the one from the server
 
                 if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
                     packet_t p = {};
                     p.type = SNAPSHOT_DATA;
-                    p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-snapshot_buffer-1];
+
+                    p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
+                    last_sent_snapshot_tick = p.data.snapshot.tick;
 
                     printf("Sending snapshots for %d\n",p.data.snapshot.tick);
                     broadcast(&p);
                 }
+                new_frame_ready=true;
+                render_game_state(sdl_renderer);                
             }
-            render_game_state(sdl_renderer);
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
+            new_frame_ready = true;
             // if the clock runs out, start the game
-            if (gl_server.gms.game_start_time != 0) {
-                if (gl_server.gms.game_start_time - gl_server.timer.get() <= 0) {
+            if (gl_server.gms.counting_down_to_game_start) {
+                LARGE_INTEGER curr = gl_server.timer.get_high_res_elapsed();
+                if (gl_server.gms.game_start_time.QuadPart - curr.QuadPart <= 0) {
                     // game_start
                     gl_server.gms.state = GMS::ROUND_PLAYING;
                     gl_server.start_game();
-                    tick_clock.start_time = gl_server.gms.game_start_time;
+
+                    // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
+                   
                     goto endof_frame;
+                    
                 }
             }
 
-            render_pregame_screen(sdl_renderer,gl_server.gms,gl_server.timer.get());
+            double time_to_start = 0.0;
+            if (gl_server.gms.counting_down_to_game_start) {
+                time_to_start = static_cast<double>(gl_server.gms.game_start_time.QuadPart - gl_server.timer.get_high_res_elapsed().QuadPart)/gl_server.timer.frequency.QuadPart;
+            }
 
-            if (gl_server.gms.game_start_time == 0) {
+            render_pregame_screen(sdl_renderer,gl_server.gms,time_to_start);
+
+            if (!gl_server.gms.counting_down_to_game_start) {
                 SDL_Rect dest = {1280/2-(236/2),460,236,36};
                 SDL_RenderCopy(sdl_renderer,textures[TexType::STARTGAME_BUTTON_TEXTURE],NULL,&dest);
                 v2i mpos = get_mouse_position();
                 if (input.mouse_just_pressed && rect_contains_point(dest,mpos)) {
-                    gl_server.gms.game_start_time = gl_server.timer.get() + 3.0;
+                    gl_server.gms.game_start_time.QuadPart = gl_server.timer.get_high_res_elapsed().QuadPart + (3 * gl_server.timer.frequency.QuadPart);
 
                     packet_t p = {};
                     p.type = GAME_START_ANNOUNCEMENT;
                     p.data.game_start_time = gl_server.gms.game_start_time;
                     broadcast(&p);
+                    gl_server.gms.counting_down_to_game_start=true;
                 }
             }
             
@@ -357,18 +390,19 @@ static void server() {
         }
         //printf("%f\n",gl_server.timer.get());
 endof_frame:
-        SDL_RenderPresent(sdl_renderer);
+        if (new_frame_ready) {
+            SDL_RenderPresent(sdl_renderer);
+        }
         
         // sleep up to next snapshot
         // this is based on snapshots during gameplay but ticks during the menu
         // perhaps a uniform system that works regardless of gamestate is best
         // when calculating current frame times and how long to sleep
-        {
-            double curr = tick_clock.getElapsedTime();
-            //printf("%f\n",curr);
-            if (curr < tick_delta) {
-                int sleep_len = (int)((tick_delta - curr)*1000.0);
-                Sleep((DWORD)sleep_len);
+        if (gl_server.gms.state == GMS::ROUND_PLAYING) {
+            // sleep to next tick
+            double len = snap_delta - snap_clock.get() - (snap_delta / 10.0);
+            if (len > 0) {
+                SDL_Delay(u32(len*1000.0));
             }
         }
 
