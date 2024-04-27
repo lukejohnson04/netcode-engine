@@ -28,6 +28,7 @@ typedef u32 entity_id;
 #define ID_DONT_EXIST 99999999
 #define ID_SERVER 566
 
+#define For(count) for(i32 ind=0;ind<count;ind++)
 #define FOR(arr,count) for(auto obj=arr;obj<arr+count;obj++)
 #define FORn(arr,count,name) for(auto name=arr;name<arr+count;name++)
 
@@ -37,20 +38,28 @@ typedef u32 entity_id;
 
 #define PI 3.1415926f
 
+struct v2;
 struct v2i {
     int x,y;
+    v2i() {}
+    v2i(int nx, int ny) : x(nx),y(ny) {} 
+    v2i(v2 a);
 };
+
+
 
 struct v2 {
     float x,y;
+    v2() {}
     v2(float nx, float ny) : x(nx), y(ny) {}
     v2(v2i a) : x((float)a.x),y((float)a.y) {}
-    v2() {}
     v2 normalize() {
         float len = sqrt((x * x) + (y * y));
         return v2(x / len, y / len);
     }
 };
+
+v2i::v2i(v2 a) : x((int)a.x),y((int)a.y) {}
 
 
 inline v2 operator*(v2 left, double right) {
@@ -97,11 +106,17 @@ inline v2 &operator-=(v2 &left, v2 right) {
     return left;
 }
 
+inline v2 &operator*=(v2 &v, float mult) {
+    v.x *= mult;
+    v.y *= mult;
+    return v;
+}
+
 
 struct iRect {
     int x,y,w,h;
-    iRect(SDL_Rect a) : x(a.x),y(a.y),w(a.w),h(a.h) {}
 };
+
 
 struct fRect {
     fRect(float nx,float ny,float nw,float nh) : x(nx),y(ny),w(nw),h(nh) {}
@@ -143,8 +158,21 @@ v2 lerp(v2 a, v2 b, float f) {
 }
 
 struct Color {
-    u8 r,g,b,a;
+    Color(u8 nr,u8 ng,u8 nb,u8 na) : r(nr),g(ng),b(nb),a(na) {}
+    union {
+        struct {
+            u8 r,g,b,a;
+        };
+        u32 hex;
+    };
 };
+
+
+inline bool operator==(Color &left, Color &right) {
+    return left.hex==right.hex;
+}
+
+
 
 static float get_angle_to_point(v2 a, v2 b) {
     float angle = atan2(a.y - b.y, a.x - b.x);

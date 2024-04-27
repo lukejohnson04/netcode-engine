@@ -23,7 +23,7 @@ struct server_t {
 
     std::vector<int> dropped_command_times;
 
-    overall_game_manager gms;
+    overall_game_manager &gms=NetState.gms;
 
     void start_game();
 
@@ -156,29 +156,14 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                 printf("Error: received command for tick %d but snapshot %d has been sent!\n",first_cmd.tick,last_sent_snapshot_tick);
                 gl_server.dropped_command_times.push_back(gs.tick);
             } else if (first_cmd.tick < gs.tick) {
-                //int curr=gs.tick;
                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,first_cmd.tick);
-                //load_game_state_up_to_tick(gs,gl_server.NetState,curr);
             }
-        } else {
-            printf("Erm.. Discharge alert!! XD\n");
         }
     }
     return 0;
 }
 
-void server_t::start_game() {
-    gms.state = ROUND_PLAYING;
-    add_wall({5,3});
-    add_wall({6,3});
-    add_wall({7,3});
-    add_wall({8,3});
-    add_wall({5,5});
-    add_wall({6,7});
-    for (i32 ind=0; ind<gms.connected_players; ind++) {
-        add_player();
-    }
-}
+
 
 static void server() {
     TCHAR szNewTitle[MAX_PATH];
@@ -291,7 +276,9 @@ static void server() {
     
     // base the snapshot buffer off of the ping of the players
     // make the snapshot buffer greater if some of the players have very high ping
-    int snapshot_buffer=7;
+    // set to 7 over wan
+    // can be super low on lan
+    int snapshot_buffer=3;
     int target_tick=0;
     // interp delay on clients should always be below the snapshot buffer on the server
 
@@ -306,22 +293,6 @@ static void server() {
         if (gl_server.gms.state == GMS::ROUND_PLAYING) {
             target_tick = gl_server.get_target_tick();
             gl_server.last_tick=target_tick;
-
-            /*
-            auto &cmd=gl_server.dropped_command_times.begin();
-            while (cmd!=gl_server.dropped_command_times.end()) {
-                if (cmd<target_tick-8*tick_hz) {
-                    cmd=gl_server.dropped_command_times.erase(cmd);
-                } else {
-                    cmd++;
-                }
-            }
-            if (gl_server.dropped_command_times.size() > 10) {
-                snapshot_buffer=5;
-            } else if (gl_server.dropped_command_times.size() > 20) {
-                snapshot_buffer=6;
-            }
-            */
 
             if (snap_clock.get() > snap_delta) {
                 snap_clock.Restart();
@@ -347,14 +318,20 @@ static void server() {
                 render_game_state(sdl_renderer);                
             }
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
-            new_frame_ready = true;
+            new_frame_ready=false;
+            static int p_connected_last_time=0;
+            if (p_connected_last_time != gl_server.gms.connected_players) {
+                new_frame_ready=true;
+                p_connected_last_time = gl_server.gms.connected_players;
+            } 
             // if the clock runs out, start the game
             if (gl_server.gms.counting_down_to_game_start) {
+                new_frame_ready=true;
                 LARGE_INTEGER curr = gl_server.timer.get_high_res_elapsed();
                 if (gl_server.gms.game_start_time.QuadPart - curr.QuadPart <= 0) {
                     // game_start
                     gl_server.gms.state = GMS::ROUND_PLAYING;
-                    gl_server.start_game();
+                    load_gamestate_for_round(gl_server.gms);
 
                     // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
@@ -369,13 +346,17 @@ static void server() {
                 time_to_start = static_cast<double>(gl_server.gms.game_start_time.QuadPart - gl_server.timer.get_high_res_elapsed().QuadPart)/gl_server.timer.frequency.QuadPart;
             }
 
-            render_pregame_screen(sdl_renderer,gl_server.gms,time_to_start);
+            if (new_frame_ready) {
+                render_pregame_screen(sdl_renderer,gl_server.gms,time_to_start);
+            }
 
             if (!gl_server.gms.counting_down_to_game_start) {
                 SDL_Rect dest = {1280/2-(236/2),460,236,36};
-                SDL_RenderCopy(sdl_renderer,textures[TexType::STARTGAME_BUTTON_TEXTURE],NULL,&dest);
                 v2i mpos = get_mouse_position();
-                if (input.mouse_just_pressed && rect_contains_point(dest,mpos)) {
+                if (new_frame_ready) {
+                    SDL_RenderCopy(sdl_renderer,textures[TexType::STARTGAME_BUTTON_TEXTURE],NULL,&dest);
+                }
+                if (input.mouse_just_pressed && rect_contains_point(*(iRect*)&dest,mpos)) {
                     gl_server.gms.game_start_time.QuadPart = gl_server.timer.get_high_res_elapsed().QuadPart + (3 * gl_server.timer.frequency.QuadPart);
 
                     packet_t p = {};

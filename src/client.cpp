@@ -15,7 +15,7 @@ struct client_t {
     netstate_info_t NetState;
     std::vector<command_t> command_history;
 
-    overall_game_manager gms;
+    overall_game_manager &gms=NetState.gms;
 
     /*
       struct {
@@ -71,6 +71,10 @@ static void command_callback(character *player, command_t cmd) {
         default:
             break;
     }
+}
+
+static void no_bullets_fire_effects() {
+    Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_NO_AMMO_FIRE_SFX], 0 );
 }
 
 

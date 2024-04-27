@@ -11,6 +11,11 @@ enum {
     CMD_SHOOT,
     CMD_RELOAD,
 
+    // special abilities
+    CMD_FIREBURST,
+    CMD_SHIELD,
+    CMD_INVISIBLE,
+
     // Server commands
     CMD_ADD_PLAYER,
     CMD_DIE,
@@ -64,18 +69,36 @@ struct entity_net_header_t {
 };
 
 
+double shield_cooldown_length=6.0;
+double invisibility_cooldown_length=12.0;
+double fireburst_cooldown_length = 8.0;
+
 struct character {
     v2 pos;
     v2 vel;
+    v2 target_vel={0,0};
     i32 health=100;
 
-    bool flip=false;
+    enum {
+        FLINTLOCK,
+        FIREBURST,
+        KNIFE,
+        FISTS
+    } selected_weapon=FLINTLOCK;
 
-    bool bullet_loaded=true;
+    bool flip=false;
+    bool visible=true;
+
+    int bullets_in_mag=5;
     bool reloading=false;
     double damage_timer=0.0;
     double reload_timer=0.0;
+    double shield_timer=0.0;
     double animation_timer=0.0;
+    double invisibility_timer=0.0;
+    double invisibility_cooldown=0.0;
+    double shield_cooldown=0.0;
+    double fireburst_cooldown=0.0;
 
     enum {
         IDLE,
@@ -83,13 +106,16 @@ struct character {
         PUNCHING,
         TAKING_DAMAGE,
         DEAD,
+        FIREBURSTING,
+        SHIELD,
         CHARACTER_STATE_COUNT
     } curr_state=IDLE;
 
     union {
         double timer=0.0;
     } state;
-    
+
+    Color color={255,255,255,255};
     u32 id=ID_DONT_EXIST;
     double r_time;
     double creation_time;
@@ -110,6 +136,12 @@ character create_player(v2 pos,u32 nid) {
 
 static void add_bullet(v2 pos, float rot, entity_id shooter_id);
 static void command_callback(character *player, command_t cmd);
+static void no_bullets_fire_effects();
+
+void player_take_damage(character *player, int dmg) {
+    player->health -= dmg;
+    player->damage_timer=0.5;
+}
 
 void process_command(character *player, command_t cmd) {
     if (cmd.code == CMD_PUNCH) {
@@ -117,12 +149,40 @@ void process_command(character *player, command_t cmd) {
         player->curr_state = character::PUNCHING;
     } else if (cmd.code == CMD_SHOOT) {
         add_bullet(player->pos+v2(16,16), cmd.props.rot, player->id);
-        player->bullet_loaded=false;
+        player->bullets_in_mag--;
     } else if (cmd.code == CMD_DIE) {
         player->curr_state = character::DEAD;
+    } else if (cmd.code == CMD_FIREBURST) {
+        if (player->fireburst_cooldown > 0) {
+            return;
+        }
+    } else if (cmd.code == CMD_SHIELD) {
+        if (player->shield_cooldown > 0) {
+            return;
+        }
+        player->curr_state = character::SHIELD;
+        player->shield_timer = 1.0;
+        player->shield_cooldown = shield_cooldown_length;
     } else if (cmd.code == CMD_RELOAD) {
-        player->reloading = true;
-        player->reload_timer=3.0;
+        if (player->reloading) {
+            // cancel reload
+            player->reloading=false;
+        } else if (player->bullets_in_mag != 5 && player->reloading == false) {
+            player->reloading = true;
+            player->reload_timer=2.0;
+        }
+    } else if (cmd.code == CMD_INVISIBLE) {
+        if (player->invisibility_cooldown > 0) {
+            return;
+        } if (player->curr_state == character::SHIELD) {
+            return;
+        }
+        player->visible = false;
+        player->invisibility_timer=2.5;
+        player->invisibility_cooldown = invisibility_cooldown_length;
+    } else if (cmd.code == CMD_FIREBURST) {
+        // fuck this one actually lol
+        return;
     } else {
         player->command_state[cmd.code] = cmd.press;
     }
@@ -137,16 +197,16 @@ void process_command(character *player, command_t cmd) {
 // can't undo animation like this because we don't know where we were in the
 // animation when the command was called
 /*
-void unprocess_command(character *player, command_t cmd) {
-    if (cmd.code == CMD_SHOOT) {
-        pop_bullet();
-    } else if (cmd.code == CMD_PUNCH) {
-        player->state.timer = 0;
-        player->curr_state = character::IDLE;
-    } else {
-        player->command_state[cmd.code] = !cmd.press;
-    }
-}
+  void unprocess_command(character *player, command_t cmd) {
+  if (cmd.code == CMD_SHOOT) {
+  pop_bullet();
+  } else if (cmd.code == CMD_PUNCH) {
+  player->state.timer = 0;
+  player->curr_state = character::IDLE;
+  } else {
+  player->command_state[cmd.code] = !cmd.press;
+  }
+  }
 */
 
 void update_player_controller(character *player, int tick) {
@@ -170,16 +230,29 @@ void update_player_controller(character *player, int tick) {
         new_commands[cmd_count++] = {CMD_DOWN,true,tick,player->id};
     } else if (input.just_released[SDL_SCANCODE_S]) {
         new_commands[cmd_count++] = {CMD_DOWN,false,tick,player->id};
-    } if (input.just_pressed[SDL_SCANCODE_SPACE] && player->bullet_loaded) {
-        v2i mPos = get_mouse_position();
-        float rot = get_angle_to_point(player->pos+v2(16,16)+v2(8,8),mPos);
+    } if (input.just_pressed[SDL_SCANCODE_SPACE]) {
+        if (player->bullets_in_mag==0) {
+            no_bullets_fire_effects();
+            // make clicking sound effect
+        } else {
+            v2i mPos = get_mouse_position();
+            float rot = get_angle_to_point(player->pos+v2(16,16)+v2(8,8),mPos);
 
-        new_commands[cmd_count++] = {CMD_SHOOT,true,tick,player->id};
-        new_commands[cmd_count-1].props.rot = rot;
+            new_commands[cmd_count++] = {CMD_SHOOT,true,tick,player->id};
+            new_commands[cmd_count-1].props.rot = rot;
+        }
     } if (input.mouse_just_pressed) {
         new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
-    } if (input.just_pressed[SDL_SCANCODE_R] && player->bullet_loaded == false && player->reloading == false) {
+    } if (input.just_pressed[SDL_SCANCODE_R]) {
         new_commands[cmd_count++] = {CMD_RELOAD,true,tick,player->id};
+    } if (input.just_pressed[SDL_SCANCODE_F]) {
+        new_commands[cmd_count++] = {CMD_INVISIBLE,true,tick,player->id};
+    }
+
+    if (input.just_pressed[SDL_SCANCODE_LCTRL]) {
+        new_commands[cmd_count++] = {CMD_SHIELD,true,tick,player->id};
+    } if (input.just_pressed[SDL_SCANCODE_Q]) {
+        new_commands[cmd_count++] = {CMD_FIREBURST,true,tick,player->id};
     }
 
     for (u32 id=0; id < cmd_count; id++) {
@@ -191,26 +264,42 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     if (player->curr_state == character::DEAD) {
         return;
     }
-    
+
     float move_speed = 300;
-    if (player->command_state[CMD_LEFT]) {
-        player->vel.x = -move_speed;
-        player->flip = true;
-    } else if (player->command_state[CMD_RIGHT]) {
-        player->vel.x = move_speed;
-        player->flip = false;
+    if (player->curr_state != character::TAKING_DAMAGE && player->curr_state != character::SHIELD) {
+        if (player->command_state[CMD_LEFT]) {
+            player->target_vel.x = -1;
+            player->flip = true;
+        } else if (player->command_state[CMD_RIGHT]) {
+            player->target_vel.x = 1;
+            player->flip = false;
+        } else {
+            player->target_vel.x = 0;
+        } if (player->command_state[CMD_UP]) {
+            player->target_vel.y = -1;
+        } else if (player->command_state[CMD_DOWN]) {
+            player->target_vel.y = 1;
+        } else {
+            player->target_vel.y = 0;
+        }
     } else {
-        player->vel.x = 0;
-    } if (player->command_state[CMD_UP]) {
-        player->vel.y = -move_speed;
-    } else if (player->command_state[CMD_DOWN]) {
-        player->vel.y = move_speed;
-    } else {
-        player->vel.y = 0;
+        player->target_vel = {0,0};
     }
 
-    if (player->curr_state == character::TAKING_DAMAGE) {
-        player->vel = {0,0};
+
+    if (player->target_vel.x == 0) {
+        player->vel.x *= player->curr_state == character::TAKING_DAMAGE ? 0.85f : 0.75f;
+    } else {
+        player->vel.x = player->target_vel.x*move_speed;
+    } if (player->target_vel.y == 0) {
+        player->vel.y *= player->curr_state == character::TAKING_DAMAGE ? 0.85f : 0.75f;
+    } else {
+        player->vel.y = player->target_vel.y*move_speed;
+    }
+    // so it'll take a quarter of a second to get to maximum speed
+
+    if (player->reloading) {
+        player->vel *= 0.5f;
     }
 
     
@@ -244,19 +333,29 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         }
     }
 
-    // see if you're getting punched
-    FOR(players,player_count) {
-        if (obj->id == player->id) {
-            continue;
-        }
-        if (obj->curr_state != character::PUNCHING) {
-            continue;
-        }
-        if (player->pos.x > obj->pos.x && player->pos.x < obj->pos.x + 50 && abs(player->pos.y - obj->pos.y) < 32) {
-            // get punched!
-            player->curr_state = character::TAKING_DAMAGE;
-            player->state.timer = 0.5;
-            break;
+    if (player->curr_state != character::TAKING_DAMAGE) {
+        fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+        // see if you're getting punched
+        FOR(players,player_count) {
+            if (obj->id == player->id) {
+                continue;
+            }
+            if (obj->curr_state != character::PUNCHING) {
+                continue;
+            }
+            fRect punch_hitbox = {obj->pos.x + 32,obj->pos.y + 16,48,32};
+            if (obj->flip) {
+                punch_hitbox.x -= punch_hitbox.w;
+            }
+        
+            if (rects_collide(p_hitbox,punch_hitbox)) {
+                // get punched!
+                player->curr_state = character::TAKING_DAMAGE;
+                player->state.timer = 0.5;
+                player->vel.x = (float)(obj->flip ? -1200 : 1200);
+                player_take_damage(player,10);
+                break;
+            }
         }
     }
 
@@ -273,17 +372,27 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
             player->damage_timer = 0;
         }
     } if (player->reloading && player->reload_timer) {
-        if (player->vel != v2(0,0)) {
-            player->reloading=false;
-            // stop sfx if they're playing
-        }
         player->reload_timer -= delta;
         if (player->reload_timer <= 0) {
             player->reload_timer = 0;
             player->reloading = false;
-            player->bullet_loaded = true;
+            player->bullets_in_mag=5;
+        }
+    } if (player->curr_state == character::SHIELD) {
+        player->shield_timer -= delta;
+        if (player->shield_timer <= 0) {
+            player->curr_state = character::IDLE;
+        }
+    } if (player->visible == false && player->invisibility_timer > 0) {
+        player->invisibility_timer -= delta;
+        if (player->invisibility_timer <= 0) {
+            player->invisibility_timer = 0;
+            player->visible = true;
         }
     }
+    player->invisibility_cooldown-=delta;
+    player->shield_cooldown-=delta;
+    player->fireburst_cooldown-=delta;
 
     player->r_time += delta;
 }
@@ -343,8 +452,3 @@ void fast_forward_player(character *player, double end_time, std::vector<command
 }
 
 */
-
-void player_take_damage(character *player, int dmg) {
-    player->health -= dmg;
-    player->damage_timer=0.5;
-}

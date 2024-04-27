@@ -120,13 +120,29 @@ static void GameGUIStart() {
 
     int target_tick=0;
 
-    // health text
-    generic_drawable health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
-    health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
-
     int connected_last_tick = client_st.gms.connected_players;
 
     client_st.gms.state = GMS::PREGAME_SCREEN;
+
+    struct {
+        generic_drawable health_text;
+        generic_drawable reload_text;
+        generic_drawable ability_sprites[4];
+        generic_drawable ability_ui_box;
+    } gui_elements;
+    gui_elements.health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
+    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
+    gui_elements.ability_ui_box.texture = textures[TexType::UI_TEXTURE];
+    
+    for (i32 ind=0;ind<4;ind++) {
+        generic_drawable &sprite=gui_elements.ability_sprites[ind];
+        sprite.texture = textures[TexType::ABILITIES_TEXTURE];
+        
+        sprite.bound = {ind*48,0,48,48};
+        sprite.scale = {1.5,1.5};
+        sprite.position = {1280-16-((4-ind)*sprite.get_draw_rect().w),720-16-sprite.get_draw_rect().h};
+    }
+
     
     while (running) {
         // input
@@ -161,7 +177,17 @@ static void GameGUIStart() {
                 gs.update(client_st.NetState,tick_delta);
                 gs.tick++;
             }
+
+            
             // interpolate
+            // TODO: there's a delay when you punch another player
+            // this is because the other player is only interpolated,
+            // so we don't update them getting knocked back. We simply
+            // punch and then wait for the server to tell us they took
+            // knockback. This isn't horribly noticable but is kind of awful
+            // from a game feel perspective. The solution is to use command data
+            // to interpolate. We have enough ticks worth of data to do it anyways,
+            // the linear interpolation is barely even noticable at 60 ticks
             if (client_st.NetState.snapshots.size() > 0) {
                 int interp_tick = target_tick-client_st.NetState.interp_delay;
                 game_state *prev_snap=nullptr;
@@ -194,7 +220,6 @@ static void GameGUIStart() {
                     printf("No snapshots to interpolate between\n");
                 } else {
 
-
                     FORn(gs.players,gs.player_count,chara) {
                         if (chara==player) {
                             continue;
@@ -212,9 +237,18 @@ static void GameGUIStart() {
             }
             last_tick_processed_in_client_loop=target_tick;
             
-            if (player && player->health != p_health_before_update) {
-                health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
-                health_text.position = {16,720-16-(health_text.get_draw_rect().h)};
+            if (player) {
+                if (player->health != p_health_before_update) {
+                    gui_elements.health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
+                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
+                } if (player->reloading) {
+                    std::string reload_str = std::to_string(player->reload_timer);
+                    if (reload_str.size() > 3) {
+                        reload_str.erase(reload_str.begin()+3,reload_str.end());
+                    }
+                    gui_elements.reload_text = generate_text(sdl_renderer,m5x7,reload_str,{255,0,0,255});
+                    gui_elements.reload_text.position = player->pos + v2i(16-8,48);
+                }
             }
 
             if (o_num != target_tick) {
@@ -227,7 +261,39 @@ static void GameGUIStart() {
 
             render_game_state(sdl_renderer);
             // gui
-            SDL_RenderCopy(sdl_renderer,health_text.texture,NULL,&health_text.get_draw_rect());
+            SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
+            if (player && player->reloading) {
+                SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&gui_elements.reload_text.get_draw_rect());
+            }
+
+            // render the score at the end of the round
+            if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
+                std::string score_str = std::to_string(gs.score[0]) + "-" + std::to_string(gs.score[1]);
+                generic_drawable score_text = generate_text(sdl_renderer,m5x7,score_str,{0,255,255,255});
+                score_text.scale = {16,16};
+                score_text.position = {1280/2 - score_text.get_draw_rect().w/2,720/2+score_text.get_draw_rect().h/2};
+                SDL_RenderCopy(sdl_renderer,score_text.texture,NULL,&score_text.get_draw_rect());
+            }
+            
+            if (player) {
+                // draw abilities
+                generic_drawable cooldown_text;
+                std::string cooldown_str;
+                for (i32 ind=0;ind<4;ind++) {
+                    generic_drawable *sprite=&gui_elements.ability_sprites[ind];
+                    
+                    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sprite->get_draw_rect());
+                    if (ind==0 && player->invisibility_cooldown > 0) {
+                        render_ability_sprite(sprite,player->invisibility_cooldown,sdl_renderer);
+                    } else if (ind == 1 && player->shield_cooldown > 0) {
+                        render_ability_sprite(sprite,player->shield_cooldown,sdl_renderer);
+                    } else if (ind == 2 && player->fireburst_cooldown > 0) {
+                        render_ability_sprite(sprite,player->fireburst_cooldown,sdl_renderer);
+                    } else if (ind == 3 && player->reloading) {
+                        render_ability_sprite(sprite,player->reload_timer,sdl_renderer);
+                    }
+                }
+            }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
             double time_to_start=0.0;
@@ -250,6 +316,11 @@ static void GameGUIStart() {
             }
         
             render_pregame_screen(sdl_renderer,client_st.gms,time_to_start);
+            // render player color selector
+            /*SDL_Rect p_rect = {0,0,32,32};
+            SDL_Rect dest_rect = {200,500,64,64};
+            SDL_RenderCopy(sdl_renderer,textures[TexType::PLAYER_TEXTURE],&p_rect,&dest_rect);
+            */
         }
 
 endof_frame:

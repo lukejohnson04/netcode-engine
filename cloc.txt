@@ -1,0 +1,3 @@
+call in src directory
+
+cloc-1.98.exe --no3 --by-file-by-lang ../
