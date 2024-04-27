@@ -97,7 +97,7 @@ static void GameGUIStart() {
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
     init_sfx();
-    m5x7 = TTF_OpenFont("../res/m5x7.ttf",16);
+    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
     
 
     bool running=true;
@@ -221,9 +221,10 @@ static void GameGUIStart() {
                 } else {
 
                     FORn(gs.players,gs.player_count,chara) {
-                        if (chara==player) {
+                        if (chara==player || chara->curr_state == character::TAKING_DAMAGE) {
                             continue;
                         }
+                        //update_player(
                         if (exac_snap) {
                             chara->pos = exac_snap->players[chara->id].pos;
                         } else if (next_snap && prev_snap) {
@@ -268,11 +269,22 @@ static void GameGUIStart() {
 
             // render the score at the end of the round
             if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
-                std::string score_str = std::to_string(gs.score[0]) + "-" + std::to_string(gs.score[1]);
-                generic_drawable score_text = generate_text(sdl_renderer,m5x7,score_str,{0,255,255,255});
-                score_text.scale = {16,16};
-                score_text.position = {1280/2 - score_text.get_draw_rect().w/2,720/2+score_text.get_draw_rect().h/2};
-                SDL_RenderCopy(sdl_renderer,score_text.texture,NULL,&score_text.get_draw_rect());
+                std::string left_str = std::to_string(gs.score[0]);
+                std::string right_str = std::to_string(gs.score[1]);
+                generic_drawable middle_text = generate_text(sdl_renderer,m5x7,"-",{0,0,0,255});
+                generic_drawable left_text = generate_text(sdl_renderer,m5x7,left_str,*(SDL_Color*)&gs.players[0].color);
+                generic_drawable right_text = generate_text(sdl_renderer,m5x7,right_str,*(SDL_Color*)&gs.players[1].color);
+                
+                middle_text.scale = {16,16};
+                left_text.scale = {16,16};
+                right_text.scale = {16,16};
+                middle_text.position = {1280/2 - middle_text.get_draw_rect().w/2,720/2+middle_text.get_draw_rect().h/2};
+                left_text.position = {middle_text.position.x - left_text.get_draw_rect().w-16,middle_text.position.y};
+                right_text.position = {middle_text.position.x + middle_text.get_draw_rect().w+16,middle_text.position.y};
+
+                SDL_RenderCopy(sdl_renderer,left_text.texture,NULL,&left_text.get_draw_rect());
+                SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_text.get_draw_rect());
+                SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_text.get_draw_rect());
             }
             
             if (player) {

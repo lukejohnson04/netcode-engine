@@ -115,6 +115,28 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
                         
         } else if (pc.type == SNAPSHOT_DATA) {
             // mutex this
+            if (load_new_snapshot && new_snapshot.tick == pc.data.snapshot.tick) {
+                new_snapshot = pc.data.snapshot;
+                continue;
+            }
+            bool found=false;
+            for (i32 ind=0; ind<client_snapshot_buffer_stack.size(); ind++) {
+                if (client_snapshot_buffer_stack[ind].tick==pc.data.snapshot.tick) {
+                    client_snapshot_buffer_stack[ind] = pc.data.snapshot;
+                    found=true;
+                    break;
+                }
+            }
+            if (found) continue;
+            for (i32 ind=0; ind<client_st.NetState.snapshots.size(); ind++) {
+                if (client_st.NetState.snapshots[ind].tick==pc.data.snapshot.tick) {
+                    client_st.NetState.snapshots[ind] = pc.data.snapshot;
+                    found=true;
+                    break;
+                }
+            }
+            if (found) continue;            
+            
             client_snapshot_buffer_stack.push_back(pc.data.snapshot);
 
             //std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
@@ -130,13 +152,8 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 
                 // dont do this update loop because we could skip past the immediate next tick that
                 // we otherwise would have updated on in the main update loop
-                /*
                 
-                while(gs.tick<server_tick) {
-                    gs.update(client_st.NetState,1.0/60.0);
-                    gs.tick++;
-                }
-                */                
+                
 
             } else {
                 printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot.tick,gs.tick,server_tick);
@@ -203,22 +220,17 @@ static void client_connect(int port,std::string ip_addr) {
 
 
     client_st.sync_timer.Start();
-    LARGE_INTEGER t_0=client_st.sync_timer.get_high_res_elapsed();
+    volatile LARGE_INTEGER t_0=client_st.sync_timer.get_high_res_elapsed();
 
-    int ret = send_packet(connect_socket,&servaddr,&p);
+    volatile int ret = send_packet(connect_socket,&servaddr,&p);
 
     // default interpolation delay - 100ms with default tickrate of 60
 
-    if (ret < 0) {
-        printf("ERROR: sendto failed\n");
-        printf("%d",WSAGetLastError());
-        return;
-    }
     
     p = {};
     ret = recieve_packet(connect_socket,&servaddr,&p);
 
-    LARGE_INTEGER t_3=client_st.sync_timer.get_high_res_elapsed();
+    volatile LARGE_INTEGER t_3=client_st.sync_timer.get_high_res_elapsed();
 
     if (p.type == CONNECTION_ACCEPTED) {
         //client_st.local_time_on_connection = client_st.sync_timer.get();

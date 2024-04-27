@@ -84,8 +84,6 @@ global_variable game_state gs;
 static void add_player() {
     u32 id = gs.player_count++;
     gs.players[id] = create_player({0,0},id);
-    gs.players[id].creation_time = gs.time;
-    gs.players[id].r_time = gs.time;
 }
 
 static void add_wall(v2i wall) {
@@ -114,13 +112,16 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = ROUND_PLAYING;
     i32 rand_level = rand() % 4;    
-    SDL_Surface *level_surface = IMG_Load("../res/levels.png");
-
+    SDL_Surface *level_surface = IMG_Load("res/levels.png");
 
     gs.bullet_count=0;
     gs.wall_count=0;
     gs.one_remaining_tick=0;
 
+
+    i32 spawn_count=0;
+    v2i spawns[8]={{0,0}};
+    
     for (i32 x=0; x<20; x++) {
         for (i32 y=0; y<12; y++) {
             Color col = {0,0,0,0};
@@ -128,20 +129,24 @@ void load_gamestate_for_round(overall_game_manager &gms) {
             SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
             if (col == Color(0,0,0,255)) {
                 add_wall({x,y});
+            } else if (col == Color(255,0,0,255)) {
+                spawns[spawn_count++] = {x,y};
             }
         }
     }
 
+    bool create_all_charas = gs.player_count == gms.connected_players ? false : true;
+    gs.player_count=0;
+
     for (i32 ind=0; ind<gms.connected_players; ind++) {
-        if (gs.player_count == gms.connected_players) {
-            Color old_color = gs.players[ind].color;
-            u32 old_id = gs.players[ind].id;
-            gs.players[ind] = {};
-            gs.players[ind].id = old_id;
-            gs.players[ind].color = old_color;
+        if (create_all_charas == false) {
+            character old_chara = gs.players[ind];
+            
+            add_player();
+            gs.players[ind] = create_player({0,0},old_chara.id);
+            gs.players[ind].color = old_chara.color;
         } else {
             add_player();
-            gs.players[gs.player_count-1].pos = {10*64,2*64};
         
             int total_color_points=rand() % 255 + (255+200);
             gs.players[gs.player_count-1].color.r = rand()%MIN(255,total_color_points);
@@ -150,7 +155,13 @@ void load_gamestate_for_round(overall_game_manager &gms) {
             total_color_points-=gs.players[gs.player_count-1].color.g;
             gs.players[gs.player_count-1].color.b = total_color_points;
         }
+        i32 rand_spawn = rand() % spawn_count;
+        gs.players[ind].pos = spawns[rand_spawn]*64;
+        spawns[rand_spawn] = spawns[spawn_count-1];
+        spawn_count--;
     }
+
+    SDL_FreeSurface(level_surface);
 
     // start in 5 seconds
     gs.round_start_tick = gs.tick + 300;
@@ -227,11 +238,11 @@ void game_state::update(netstate_info_t &c, double delta) {
     int interp_tick=tick-interp_delay;
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
-        if (c.do_charas_interp[obj->id] && !c.authoritative && c.snapshots.size() > 0) {
+        //if (c.do_charas_interp[obj->id] && !c.authoritative && c.snapshots.size() > 0) {
             
-        } else {
-            update_player(obj,delta,wall_count,walls,player_count,players);
-        }
+        //} else {
+        update_player(obj,delta,wall_count,walls,player_count,players);
+            //}
     }
 
     FOR(bullets,bullet_count) {

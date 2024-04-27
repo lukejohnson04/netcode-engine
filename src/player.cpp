@@ -117,16 +117,12 @@ struct character {
 
     Color color={255,255,255,255};
     u32 id=ID_DONT_EXIST;
-    double r_time;
-    double creation_time;
-    int cmd_interp=10;
-    bool interp=false;
 
     bool command_state[CMD_COUNT];
 };
 
 character create_player(v2 pos,u32 nid) {
-    character p;
+    character p={};
     p.pos = pos;
     p.vel = {0,0};
     p.id = nid;
@@ -333,7 +329,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         }
     }
 
-    if (player->curr_state != character::TAKING_DAMAGE) {
+    if (player->curr_state != character::TAKING_DAMAGE && player->curr_state != character::SHIELD) {
         fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
         // see if you're getting punched
         FOR(players,player_count) {
@@ -351,6 +347,9 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
             if (rects_collide(p_hitbox,punch_hitbox)) {
                 // get punched!
                 player->curr_state = character::TAKING_DAMAGE;
+                if (player->reloading) {
+                    player->reloading=false;
+                }
                 player->state.timer = 0.5;
                 player->vel.x = (float)(obj->flip ? -1200 : 1200);
                 player_take_damage(player,10);
@@ -393,8 +392,6 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     player->invisibility_cooldown-=delta;
     player->shield_cooldown-=delta;
     player->fireburst_cooldown-=delta;
-
-    player->r_time += delta;
 }
 
 

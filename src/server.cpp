@@ -56,7 +56,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
     
     while (1) {
         packet_t p = {};
-        int ret = recieve_packet(connect_socket,&clientaddr,&p);
+        volatile int ret = recieve_packet(connect_socket,&clientaddr,&p);
 
         if (ret < 0) {
             printf("ERROR: recvfrom() failed\n");
@@ -67,7 +67,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
         if (p.type == MESSAGE) {
             printf("%s\n",p.data.msg);
         } else if (p.type == CONNECTION_REQUEST) {
-            LARGE_INTEGER t_1=gl_server.timer.get_high_res_elapsed();
+            volatile LARGE_INTEGER t_1=gl_server.timer.get_high_res_elapsed();
             
             in_addr client_ip_addr;
             memcpy(&client_ip_addr, &clientaddr.sin_addr.s_addr, 4);
@@ -77,10 +77,10 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             res.type = CONNECTION_ACCEPTED;
             res.data.connection_dump.id = gl_server.client_count;
 
-            LARGE_INTEGER t_2 = gl_server.timer.get_high_res_elapsed();
+            volatile LARGE_INTEGER t_2 = gl_server.timer.get_high_res_elapsed();
 
-            res.data.connection_dump.t_1 = t_1;
-            res.data.connection_dump.t_2 = t_2;
+            res.data.connection_dump.t_1 = *(LARGE_INTEGER*) &t_1;
+            res.data.connection_dump.t_2 = *(LARGE_INTEGER*) &t_2;
             
             send_packet(connect_socket,&clientaddr,&res);
 
@@ -152,11 +152,23 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
             // dont rewind state it doesnt run
             // update to past (present - 2 seconds for example) and it runs fine but out of sync
-            if (first_cmd.tick < last_sent_snapshot_tick) {
-                printf("Error: received command for tick %d but snapshot %d has been sent!\n",first_cmd.tick,last_sent_snapshot_tick);
+            if (first_cmd.tick <= last_sent_snapshot_tick) {
+                //printf("Error: received command for tick %d but snapshot %d has been sent!\n",first_cmd.tick,last_sent_snapshot_tick);
                 gl_server.dropped_command_times.push_back(gs.tick);
-            } else if (first_cmd.tick < gs.tick) {
+            } if (first_cmd.tick < gs.tick) {
                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,first_cmd.tick);
+                if (first_cmd.tick <= last_sent_snapshot_tick) {
+                    // go to that snapshot and correct it
+                    for (auto &snap: gl_server.NetState.snapshots) {
+                        if (snap.tick > last_sent_snapshot_tick) continue;
+                        if (snap.tick >= first_cmd.tick) {
+                            packet_t p = {};
+                            p.type = SNAPSHOT_DATA;
+                            p.data.snapshot = snap;
+                            broadcast(&p);
+                        }
+                    }
+                }
             }
         }
     }
@@ -251,14 +263,14 @@ static void server() {
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
-    m5x7 = TTF_OpenFont("../res/m5x7.ttf",16);
+    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
 
     //r_clock_t tick_clock(gl_server.timer);
     //r_clock_t snap_clock(gl_server.timer);
     timer_t snap_clock;
-    snap_clock.Start();  
+    snap_clock.Start();
 
     double tick_hz=60;
     double snap_hz=60;
@@ -297,22 +309,24 @@ static void server() {
             if (snap_clock.get() > snap_delta) {
                 snap_clock.Restart();
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
+                if (target_tick-snapshot_buffer > 0) {
                 
-                gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
+                    gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
 
-                // send the last 6 ticks worth of snapshots
-                // that way the server doesn't need to buffer any snapshots, and the client just overwrites
-                // the latest snapshots they have with the one from the server
+                    // send the last 6 ticks worth of snapshots
+                    // that way the server doesn't need to buffer any snapshots, and the client just overwrites
+                    // the latest snapshots they have with the one from the server
 
-                if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
-                    packet_t p = {};
-                    p.type = SNAPSHOT_DATA;
+                    if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
+                        packet_t p = {};
+                        p.type = SNAPSHOT_DATA;
 
-                    p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
-                    last_sent_snapshot_tick = p.data.snapshot.tick;
+                        p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
+                        last_sent_snapshot_tick = p.data.snapshot.tick;
 
-                    printf("Sending snapshots for %d\n",p.data.snapshot.tick);
-                    broadcast(&p);
+                        printf("Sending snapshots for %d\n",p.data.snapshot.tick);
+                        broadcast(&p);
+                    }
                 }
                 new_frame_ready=true;
                 render_game_state(sdl_renderer);                
@@ -335,9 +349,8 @@ static void server() {
 
                     // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
-                   
-                    goto endof_frame;
                     
+                    goto endof_frame;                    
                 }
             }
 
