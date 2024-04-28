@@ -51,12 +51,18 @@ struct v2i {
 struct v2 {
     float x,y;
     v2() {}
+    // gonna regret this implicit constructor later lol
+    v2(int nx, int ny) : x((float)nx), y((float)ny) {}    
     v2(float nx, float ny) : x(nx), y(ny) {}
     v2(v2i a) : x((float)a.x),y((float)a.y) {}
     v2 normalize() {
         float len = sqrt((x * x) + (y * y));
         return v2(x / len, y / len);
     }
+
+    float get_length();
+
+    v2 rotate(float rad);
 };
 
 v2i::v2i(v2 a) : x((int)a.x),y((int)a.y) {}
@@ -204,4 +210,18 @@ float deg_2_rad(float d) {
 
 float rad_2_deg(float d) {
     return d / (PI/180.f);
+}
+
+
+float fdistance_between_points(v2 p1,v2 p2) {
+    return (float)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
+}
+
+
+float v2::get_length() {
+    return fdistance_between_points({0,0},*this);
+}
+
+v2 v2::rotate(float rad) {
+    return convert_angle_to_vec(convert_vec_to_angle(*this) + rad) * get_length();
 }

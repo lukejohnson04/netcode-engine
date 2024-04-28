@@ -6,6 +6,7 @@
 #include <string>
 #include <time.h>
 #include <cmath>
+#include <math.h>
 #include <tchar.h>
 #include <conio.h>
 #include <strsafe.h>
@@ -139,7 +140,7 @@ static void GameGUIStart() {
         sprite.texture = textures[TexType::ABILITIES_TEXTURE];
         
         sprite.bound = {ind*48,0,48,48};
-        sprite.scale = {1.5,1.5};
+        sprite.scale = {1.5f,1.5f};
         sprite.position = {1280-16-((4-ind)*sprite.get_draw_rect().w),720-16-sprite.get_draw_rect().h};
     }
 
@@ -363,6 +364,272 @@ endof_frame:
     Mix_Quit();
 }
 
+struct intersect_props {
+    v2 collision_point;
+    bool collides;
+};
+
+
+double distance_between_points(v2 p1, v2 p2) {
+    return (double)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
+}
+
+float cross_product(v2i a, v2i b) {
+    return (float)(a.x * b.y - a.y * b.x);
+}
+
+intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
+    intersect_props result;
+    result.collides = false;
+
+    v2i ray_direction = {ray_end.x - ray_start.x, ray_end.y - ray_start.y};
+    v2i seg_direction = {seg_end.x - seg_start.x, seg_end.y - seg_start.y};
+
+    float ray_seg_cross = cross_product(ray_direction, seg_direction);
+
+    if (ray_seg_cross == 0) // Ray and segment are parallel
+        return result;
+
+    v2i start_to_start = {seg_start.x - ray_start.x, seg_start.y - ray_start.y};
+
+    float t = cross_product(start_to_start, seg_direction) / ray_seg_cross;
+    float u = cross_product(start_to_start, ray_direction) / ray_seg_cross;
+
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        // Collision detected, calculate collision point
+        result.collides = true;
+        result.collision_point.x = ray_start.x + t * ray_direction.x;
+        result.collision_point.y = ray_start.y + t * ray_direction.y;
+    }
+
+    return result;
+}
+
+intersect_props get_collision(v2i from, v2i to, v2i *walls, int n) {
+    intersect_props res;
+    res.collides=false;
+    double closest=0.0;
+    for (i32 ind=0; ind<n; ind++) {
+        v2i *wall=&walls[ind];
+        v2i p1 = v2i(wall->x,wall->y)*64;
+        v2i p2 = v2i(wall->x+1,wall->y)*64;
+        v2i p3 = v2i(wall->x,wall->y+1)*64;
+        v2i p4 = v2i(wall->x+1,wall->y+1)*64;
+        
+        intersect_props col1 = get_intersection(from,to,p1,p2);
+        intersect_props col2 = get_intersection(from,to,p1,p3);
+        intersect_props col3 = get_intersection(from,to,p2,p4);
+        intersect_props col4 = get_intersection(from,to,p3,p4);
+        
+        if (col1.collides) {
+            double c1d = distance_between_points(from,col1.collision_point);
+            if (res.collides==false || c1d < closest) {
+                res = col1;
+                closest = c1d;
+            }
+        } if (col2.collides) {
+            double c2d = distance_between_points(from,col2.collision_point);
+            if (res.collides==false || c2d < closest) {
+                res = col2;
+                closest = c2d;
+            }
+        } if (col3.collides) {
+            double c3d = distance_between_points(from,col3.collision_point);
+            if (res.collides==false || c3d < closest) {
+                res = col3;
+                closest = c3d;
+            }
+        } if (col4.collides) {
+            double c4d = distance_between_points(from,col4.collision_point);
+            if (res.collides==false || c4d < closest) {
+                res = col4;
+                closest = c4d;
+            }
+        }
+    }
+    return res;
+}
+
+
+static void demo() {
+    SDL_Window *window=nullptr;
+    SDL_Surface *screenSurface = nullptr;
+
+    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
+        return;
+    }
+    
+    if (TTF_Init() != 0) {
+        printf("Error: %s\n", TTF_GetError()); 
+        return;
+    }
+
+    if (IMG_Init(IMG_INIT_PNG) == 0) {
+        printf("Error: %s\n", IMG_GetError());
+        return;
+    }
+
+    window = SDL_CreateWindow("Demo",
+                              SDL_WINDOWPOS_UNDEFINED,
+                              SDL_WINDOWPOS_UNDEFINED,
+                              1280,
+                              720,
+                              SDL_WINDOW_SHOWN);
+    printf("Created window\n");
+
+    if (window == nullptr) {
+        printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
+    }
+
+    SDL_Renderer* sdl_renderer;
+
+    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    if (sdl_renderer == nullptr) {
+        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
+        return;
+    }
+
+    screenSurface = SDL_GetWindowSurface(window);
+    init_textures(sdl_renderer);
+    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
+
+    bool running=true;
+
+    i32 wall_count=0;
+    v2i walls[32];
+
+    for (i32 n=0;n<4;n++) {
+        walls[wall_count++] = {12,n+4};
+    }
+    walls[wall_count++] = {4,4};
+    walls[wall_count++] = {4,5};
+    walls[wall_count++] = {6,2};
+    walls[wall_count++] = {9,7};
+    walls[wall_count++] = {15,9};
+
+
+    SDL_Texture *dot = IMG_LoadTexture(sdl_renderer,"res/dot.png");
+    
+    while (running) {
+        // input
+        PollEvents(&input,&running);
+        SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
+        SDL_RenderClear(sdl_renderer);
+        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+        FORn(walls,wall_count,wall) {
+            SDL_Rect rect = {(int)wall->x*64,wall->y*64,64,64};
+            SDL_RenderFillRect(sdl_renderer, &rect);
+        }
+
+        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+
+        v2i mpos = get_mouse_position();
+
+        /*
+          Draft 2
+        for (i32 n=0;n<40;n++) {
+            float angle = ((PI*2.f) * n) / 40.f;
+            v2 t = mpos + convert_angle_to_vec(angle) * 1200.f;
+
+            SDL_Rect dot_dest;
+            intersect_props col = get_collision(mpos,t,walls,wall_count);
+            if (col.collides) {
+                dot_dest = {(int)col.collision_point.x-8,(int)col.collision_point.y-8,16,16};
+            } else {
+                dot_dest = {(int)t.x-8,(int)t.y-8,16,16};
+            }
+        
+            SDL_Rect dot_start = {mpos.x-8,mpos.y-8,16,16};
+            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
+            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_dest);
+            SDL_RenderDrawLine(sdl_renderer,dot_start.x+8,dot_start.y+8,dot_dest.x+8,dot_dest.y+8);
+            
+            }
+        */
+        /* draft 3 & 4 */
+        // so comically slow LMAO
+        SDL_Rect dot_start = {mpos.x-8,mpos.y-8,16,16};
+        SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
+
+        i32 pt_count=wall_count*4;
+        std::vector<v2i> dests;
+
+        for (i32 n=0;n<pt_count+4;n++) {
+            /*
+              float angle = ((PI*2.f) * n) / 40.f;
+              v2 t = mpos + convert_angle_to_vec(angle) * 1200.f;
+            */
+            v2 t;
+            i32 p = n%4;
+            if (n>=pt_count) {
+                t = p==0?v2(0,0):p==1?v2(1280,0):p==2?v2(0,720):v2(1280,720);
+            } else {
+                v2i &wall = walls[(i32)floor((float)n/4.f)];
+                t = p==0?v2(wall.x,wall.y):p==1?v2(wall.x+1,wall.y):p==2?v2(wall.x,wall.y+1):v2(wall.x+1,wall.y+1);
+                t*=64;
+            }
+            
+            intersect_props col = get_collision(mpos,t,walls,wall_count);
+            v2i pt;
+            if (!col.collides) {
+                if (n < pt_count) {
+                    printf("ERROR\n");
+                }
+                pt = t;
+            } else {
+                pt = v2(col.collision_point.x,col.collision_point.y);
+            }
+
+            // two slightly off points
+            v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(mpos,t) + 0.005f) * 2000.f) + mpos;
+            v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(mpos,t) - 0.005f) * 2000.f) + mpos;
+            intersect_props col_2 = get_collision(mpos,pt_2,walls,wall_count);
+            intersect_props col_3 = get_collision(mpos,pt_3,walls,wall_count);
+            if (col_2.collides==false) {
+                dests.push_back(v2(pt_2-mpos).normalize() * 1500.f + mpos);
+            } else {
+                dests.push_back(col_2.collision_point);
+            }
+            if (col_3.collides==false) {
+                dests.push_back(v2(pt_3-mpos).normalize() * 1500.f + mpos);
+            } else {
+                dests.push_back(col_3.collision_point);
+            }
+            
+            
+            dests.push_back(pt);
+            
+        }
+
+        std::sort(dests.begin(),dests.end(),[mpos](auto &left, auto &right) {
+            return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
+        });
+
+        for (i32 n=0;n<dests.size();n++) {
+            v2i pt=dests[n];
+            v2i prev_point=n==0?dests.back():dests[n-1];
+            SDL_Vertex vertex_1 = {{(float)mpos.x,(float)mpos.y}, {169,85,75, 255}, {1, 1}};
+            SDL_Vertex vertex_2 = {{(float)pt.x,(float)pt.y}, {169,85,75, 255}, {1, 1}};
+            SDL_Vertex vertex_3 = {{(float)prev_point.x,(float)prev_point.y}, {169,85,75,255}, {1, 1}};
+            SDL_Vertex vertices[] = {vertex_1,vertex_2,vertex_3};
+            SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
+        }
+
+        /*
+        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+        for (i32 n=0; n<dests.size(); n++) {
+            v2i pt = dests[n];
+            SDL_Rect dot_dest = {pt.x-8,pt.y-8,16,16};
+            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_dest);
+            SDL_RenderDrawLine(sdl_renderer,dot_start.x+8,dot_start.y+8,dot_dest.x+8,dot_dest.y+8);
+        }
+        */
+        SDL_RenderPresent(sdl_renderer);
+
+        //SDL_RenderPresent(sdl_renderer);
+    }
+}
 
 int main(int argc, char *argv[]) {
     WSADATA wsa;
@@ -385,6 +652,9 @@ int main(int argc, char *argv[]) {
             ip_addr = std::string(argv[3]);
         }
         client_connect(port,ip_addr);
+    } else if (argc > 1 && !strcmp(argv[1],"demo")) {
+        // demo
+        demo();
     } else {
         server();
     }
