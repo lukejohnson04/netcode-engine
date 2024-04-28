@@ -11,6 +11,8 @@ enum TexType {
 
     // metagame
     LEVEL_TEXTURE,
+    SHADOW_TEXTURE,
+    RAYCAST_DOT_TEXTURE,
 
     TEXTURE_COUNT
 };
@@ -25,6 +27,11 @@ static void init_textures(SDL_Renderer *renderer) {
     textures[TexType::LEVEL_TEXTURE] = IMG_LoadTexture(renderer,"res/levels.png");
     textures[TexType::ABILITIES_TEXTURE] = IMG_LoadTexture(renderer,"res/abilities.png");
     textures[TexType::UI_TEXTURE] = IMG_LoadTexture(renderer,"res/ui.png");
+    
+    textures[TexType::RAYCAST_DOT_TEXTURE] = IMG_LoadTexture(renderer,"res/dot.png");
+
+    textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
+    SDL_SetTextureBlendMode(textures[SHADOW_TEXTURE],SDL_BLENDMODE_MOD);
 }
 
 

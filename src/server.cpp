@@ -310,7 +310,7 @@ static void server() {
                 snap_clock.Restart();
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
                 if (target_tick-snapshot_buffer > 0) {
-                
+                    
                     gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
 
                     // send the last 6 ticks worth of snapshots

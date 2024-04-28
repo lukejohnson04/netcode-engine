@@ -17,6 +17,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <unordered_set>
 #include <vector>
 #include <algorithm>
 #include <iostream>
@@ -154,6 +155,7 @@ static void GameGUIStart() {
         }
 
         if (client_st.gms.state == GMS::ROUND_PLAYING) {
+            i32 prev_wall_count=gs.wall_count;
             update_player_controller(player,target_tick);
             if (client_snapshot_buffer_stack.size() > 0) {
                 for (auto &snap:client_snapshot_buffer_stack) {
@@ -261,7 +263,46 @@ static void GameGUIStart() {
                 }
             }
 
-            render_game_state(sdl_renderer);
+            if (prev_wall_count != gs.wall_count) {
+                // regenerate raycast points
+                auto &rps = client_sided_render_geometry.raycast_points;
+                rps.clear();
+                for (i32 n=0; n<gs.wall_count; n++) {
+                    v2i &wall=gs.walls[n];
+                    rps.push_back(v2i(wall.x,wall.y)*64);
+                    rps.push_back(v2i(wall.x+1,wall.y)*64);
+                    rps.push_back(v2i(wall.x,wall.y+1)*64);
+                    rps.push_back(v2i(wall.x+1,wall.y+1)*64);
+                }
+                printf("Points before: %d\n",(i32)rps.size());
+                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+                  return *(double*)&left < *(double*)&right;
+                });
+                
+                for (auto pt=rps.begin();pt<rps.end();pt++) {
+                    i32 dupes=0;
+                    if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
+                    auto it=pt;
+                    while (it < rps.end()) {
+                        it++;
+                        if (*it == *pt) {
+                            dupes++;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    if (dupes==1 || dupes == 3) {
+                        rps.erase(pt,it);
+                        pt--;
+                    } else {
+                        pt=it-1;
+                    }
+                    
+                }
+                printf("Points after: %d\n",(i32)rps.size());
+            }
+            render_game_state(sdl_renderer,player);
             // gui
             SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
             if (player && player->reloading) {
@@ -363,93 +404,6 @@ endof_frame:
     IMG_Quit();
     Mix_Quit();
 }
-
-struct intersect_props {
-    v2 collision_point;
-    bool collides;
-};
-
-
-double distance_between_points(v2 p1, v2 p2) {
-    return (double)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
-}
-
-float cross_product(v2i a, v2i b) {
-    return (float)(a.x * b.y - a.y * b.x);
-}
-
-intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
-    intersect_props result;
-    result.collides = false;
-
-    v2i ray_direction = {ray_end.x - ray_start.x, ray_end.y - ray_start.y};
-    v2i seg_direction = {seg_end.x - seg_start.x, seg_end.y - seg_start.y};
-
-    float ray_seg_cross = cross_product(ray_direction, seg_direction);
-
-    if (ray_seg_cross == 0) // Ray and segment are parallel
-        return result;
-
-    v2i start_to_start = {seg_start.x - ray_start.x, seg_start.y - ray_start.y};
-
-    float t = cross_product(start_to_start, seg_direction) / ray_seg_cross;
-    float u = cross_product(start_to_start, ray_direction) / ray_seg_cross;
-
-    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-        // Collision detected, calculate collision point
-        result.collides = true;
-        result.collision_point.x = ray_start.x + t * ray_direction.x;
-        result.collision_point.y = ray_start.y + t * ray_direction.y;
-    }
-
-    return result;
-}
-
-intersect_props get_collision(v2i from, v2i to, v2i *walls, int n) {
-    intersect_props res;
-    res.collides=false;
-    double closest=0.0;
-    for (i32 ind=0; ind<n; ind++) {
-        v2i *wall=&walls[ind];
-        v2i p1 = v2i(wall->x,wall->y)*64;
-        v2i p2 = v2i(wall->x+1,wall->y)*64;
-        v2i p3 = v2i(wall->x,wall->y+1)*64;
-        v2i p4 = v2i(wall->x+1,wall->y+1)*64;
-        
-        intersect_props col1 = get_intersection(from,to,p1,p2);
-        intersect_props col2 = get_intersection(from,to,p1,p3);
-        intersect_props col3 = get_intersection(from,to,p2,p4);
-        intersect_props col4 = get_intersection(from,to,p3,p4);
-        
-        if (col1.collides) {
-            double c1d = distance_between_points(from,col1.collision_point);
-            if (res.collides==false || c1d < closest) {
-                res = col1;
-                closest = c1d;
-            }
-        } if (col2.collides) {
-            double c2d = distance_between_points(from,col2.collision_point);
-            if (res.collides==false || c2d < closest) {
-                res = col2;
-                closest = c2d;
-            }
-        } if (col3.collides) {
-            double c3d = distance_between_points(from,col3.collision_point);
-            if (res.collides==false || c3d < closest) {
-                res = col3;
-                closest = c3d;
-            }
-        } if (col4.collides) {
-            double c4d = distance_between_points(from,col4.collision_point);
-            if (res.collides==false || c4d < closest) {
-                res = col4;
-                closest = c4d;
-            }
-        }
-    }
-    return res;
-}
-
 
 static void demo() {
     SDL_Window *window=nullptr;
@@ -556,10 +510,6 @@ static void demo() {
         std::vector<v2i> dests;
 
         for (i32 n=0;n<pt_count+4;n++) {
-            /*
-              float angle = ((PI*2.f) * n) / 40.f;
-              v2 t = mpos + convert_angle_to_vec(angle) * 1200.f;
-            */
             v2 t;
             i32 p = n%4;
             if (n>=pt_count) {
@@ -595,8 +545,7 @@ static void demo() {
                 dests.push_back(v2(pt_3-mpos).normalize() * 1500.f + mpos);
             } else {
                 dests.push_back(col_3.collision_point);
-            }
-            
+            }            
             
             dests.push_back(pt);
             

@@ -68,9 +68,16 @@ static void command_callback(character *player, command_t cmd) {
         case CMD_RELOAD:
             Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_RELOAD_SFX], 0 );
             break;
-        default:
+        case CMD_INVISIBLE:
+            Mix_PlayChannel( -1, sound_effects[SfxType::INVISIBILITY_SFX], 0 );
             break;
+        case CMD_SHIELD:
+            Mix_PlayChannel( -1, sound_effects[SfxType::SHIELD_SFX], 0 );
+            break;
+        default:
+            return;
     }
+    // do something
 }
 
 static void no_bullets_fire_effects() {

@@ -140,6 +140,8 @@ void player_take_damage(character *player, int dmg) {
 }
 
 void process_command(character *player, command_t cmd) {
+    if (player->curr_state == character::DEAD) return;
+    
     if (cmd.code == CMD_PUNCH) {
         player->state.timer = 0.25;
         player->curr_state = character::PUNCHING;

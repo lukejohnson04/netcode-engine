@@ -65,6 +65,10 @@ struct v2 {
     v2 rotate(float rad);
 };
 
+struct v2d {
+    double x,y;
+};
+
 v2i::v2i(v2 a) : x((int)a.x),y((int)a.y) {}
 
 
@@ -92,11 +96,15 @@ inline v2 operator-(v2 right) {
     return {-right.x,-right.y};
 }
 
-inline bool operator==(v2 &left, v2 &right) {
+inline bool operator==(const v2 &left, const v2 &right) {
     return left.x == right.x && left.y == right.y;
 }
 
-inline bool operator!=(v2 &left, v2 &right) {
+inline bool operator==(const v2i &left, const v2i &right) {
+    return left.x == right.x && left.y == right.y;
+}
+
+inline bool operator!=(const v2 &left, const v2 &right) {
     return left.x != right.x || left.y != right.y;
 }
 
@@ -185,10 +193,23 @@ static float get_angle_to_point(v2 a, v2 b) {
     return angle;
 }
 
+
+static double dget_angle_to_point(v2 a, v2 b) {
+    double angle = atan2(a.y - b.y, a.x - b.x);
+    return angle;
+}
+
+
 static v2 convert_angle_to_vec(float angle) {
     v2 p = {-cos(angle), -sin(angle)};
     return p;
 }
+
+static v2 dconvert_angle_to_vec(double angle) {
+    v2 p = {(float)-cos(angle), (float)-sin(angle)};
+    return p;
+}
+
 
 // Function to determine difference between angles, accounting for wrapping (i.e. comparing 720 and 30)
 static float angle_diff(float a, float b) {
@@ -224,4 +245,90 @@ float v2::get_length() {
 
 v2 v2::rotate(float rad) {
     return convert_angle_to_vec(convert_vec_to_angle(*this) + rad) * get_length();
+}
+
+
+struct intersect_props {
+    v2 collision_point;
+    bool collides;
+};
+
+
+double distance_between_points(v2 p1, v2 p2) {
+    return (double)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
+}
+
+float cross_product(v2i a, v2i b) {
+    return (float)(a.x * b.y - a.y * b.x);
+}
+
+intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
+    intersect_props result;
+    result.collides = false;
+
+    v2i ray_direction = {ray_end.x - ray_start.x, ray_end.y - ray_start.y};
+    v2i seg_direction = {seg_end.x - seg_start.x, seg_end.y - seg_start.y};
+
+    float ray_seg_cross = cross_product(ray_direction, seg_direction);
+
+    if (ray_seg_cross == 0) // Ray and segment are parallel
+        return result;
+
+    v2i start_to_start = {seg_start.x - ray_start.x, seg_start.y - ray_start.y};
+
+    float t = cross_product(start_to_start, seg_direction) / ray_seg_cross;
+    float u = cross_product(start_to_start, ray_direction) / ray_seg_cross;
+
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        // Collision detected, calculate collision point
+        result.collides = true;
+        result.collision_point.x = ray_start.x + t * ray_direction.x;
+        result.collision_point.y = ray_start.y + t * ray_direction.y;
+    }
+
+    return result;
+}
+
+intersect_props get_collision(v2i from, v2i to, v2i *walls, int n) {
+    intersect_props res;
+    res.collides=false;
+
+    i32 c_count=0;
+    v2i collisions[64];
+    for (i32 ind=0; ind<n; ind++) {
+        v2i *wall=&walls[ind];
+        v2i p1 = v2i(wall->x,wall->y)*64;
+        v2i p2 = v2i(wall->x+1,wall->y)*64;
+        v2i p3 = v2i(wall->x,wall->y+1)*64;
+        v2i p4 = v2i(wall->x+1,wall->y+1)*64;
+        
+        intersect_props col1 = get_intersection(from,to,p1,p2);
+        intersect_props col2 = get_intersection(from,to,p1,p3);
+        intersect_props col3 = get_intersection(from,to,p2,p4);
+        intersect_props col4 = get_intersection(from,to,p3,p4);
+        
+        if (col1.collides) {
+            collisions[c_count++] = col1.collision_point;
+        } if (col2.collides) {
+            collisions[c_count++] = col2.collision_point;
+        } if (col3.collides) {
+            collisions[c_count++] = col3.collision_point;
+        } if (col4.collides) {
+            collisions[c_count++] = col4.collision_point;
+        }
+    }
+
+    if (c_count==0) return res;
+    res.collides=true;
+    res.collision_point = collisions[0];
+    double closest=distance_between_points(from,collisions[0]);
+    
+    for (i32 n=1;n<c_count;n++) {
+        double d = distance_between_points(from,collisions[n]);
+        if (d<closest) {
+            res.collision_point = collisions[n];
+            closest=d;
+        }
+    }
+    return res;
 }
