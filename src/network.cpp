@@ -23,6 +23,8 @@ enum PACKET_TYPE {
     SNAPSHOT_DATA,
     INFO_DUMP_ON_CONNECTED,
 
+    COMMAND_CALLBACK_INFO,
+
     NEW_CLIENT_CONNECTED,
     GAME_START_ANNOUNCEMENT,
     GMS_CHANGE,
@@ -89,6 +91,12 @@ struct packet_t {
         overall_game_manager gms;
         
         game_state snapshot;
+
+        struct {
+            i32 count;
+            entity_id ids[16];
+            command_t commands[16];
+        } command_callback_info;
 
         struct {
             i32 count;

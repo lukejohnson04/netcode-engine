@@ -45,22 +45,20 @@ struct client_t {
 
 global_variable client_t client_st={};
 
-//static inline int get_current_server_time(client_t cl) {
-//    return cl.server_time_on_connection + ((i64)SDL_GetTicks64() - cl.local_time_on_connection);
-//}
-
-/*
-  static inline double client_time_to_server_time(client_t cl) {
-    return cl.server_time_on_connection + cl.sync_timer.get() - cl.ping;
-}
-*/
-
 static void add_command_to_recent_commands(command_t cmd) {
     client_st.NetState.command_buffer.push_back(cmd);
 }
 
+
+// this a retched solution to the problem lmao
+std::vector<command_t> recently_played_command_sounds;
+
 static void command_callback(character *player, command_t cmd) {
-    if (player->id != client_st.client_id) return;
+    // if you're running this as the server for some reason
+    if (client_st.client_id == ID_DONT_EXIST) return;
+    if (std::find(recently_played_command_sounds.begin(),recently_played_command_sounds.end(),cmd)!=recently_played_command_sounds.end()) {
+        return;
+    }
     switch (cmd.code) {
         case CMD_SHOOT:
             Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_FIRE_SFX], 0 );
@@ -74,10 +72,24 @@ static void command_callback(character *player, command_t cmd) {
         case CMD_SHIELD:
             Mix_PlayChannel( -1, sound_effects[SfxType::SHIELD_SFX], 0 );
             break;
+        case CMD_DIE:
+            if (player->id == client_st.client_id) {
+                Mix_PlayChannel( -1, sound_effects[SfxType::LOSE_SFX], 0 );
+                printf("Processed lose callback for die command\n");
+            } else {
+                Mix_PlayChannel( -1, sound_effects[SfxType::WIN_SFX], 0 );
+                printf("Processed win callback for die command\n");
+            }
+            break;
+        case CMD_TAKE_DAMAGE:
+            printf("huh\n");
+            Mix_PlayChannel( -1, sound_effects[SfxType::HIT_SFX], 0 );
+            
+            break;
         default:
             return;
     }
-    // do something
+    recently_played_command_sounds.push_back(cmd);
 }
 
 static void no_bullets_fire_effects() {
@@ -159,11 +171,16 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 
                 // dont do this update loop because we could skip past the immediate next tick that
                 // we otherwise would have updated on in the main update loop
-                
-                
-
             } else {
                 printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot.tick,gs.tick,server_tick);
+            }
+            
+        } else if (pc.type == COMMAND_CALLBACK_INFO) {
+            for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
+                auto dupe = std::make_pair(pc.data.command_callback_info.ids[ind],pc.data.command_callback_info.commands[ind]);
+                if (find(client_st.NetState.command_callback_info.begin(),client_st.NetState.command_callback_info.end(),dupe)==client_st.NetState.command_callback_info.end()) {
+                    client_st.NetState.command_callback_info.push_back(dupe);
+                }
             }
 
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {

@@ -110,7 +110,7 @@ void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *s
             }
         }
         generic_drawable cooldown_text = generate_text(sdl_renderer,m5x7,cooldown_str,{255,0,0,0});
-        cooldown_text.position = {sprite->position.x + 16,sprite->position.y + sprite->get_draw_rect().h - 16};
+        cooldown_text.position = {sprite->position.x + 40,sprite->position.y + sprite->get_draw_rect().h - 16};
         SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cooldown_text.get_draw_rect());
     }
 }

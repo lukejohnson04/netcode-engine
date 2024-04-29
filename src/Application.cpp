@@ -131,6 +131,7 @@ static void GameGUIStart() {
         generic_drawable reload_text;
         generic_drawable ability_sprites[4];
         generic_drawable ability_ui_box;
+        generic_drawable magazine_cnt_text;
     } gui_elements;
     gui_elements.health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
@@ -167,7 +168,7 @@ static void GameGUIStart() {
             if (load_new_snapshot) {
                 gs = new_snapshot;
                 load_new_snapshot=false;
-                printf("Loaded snapshot\n");
+                //printf("Loaded snapshot\n");
             }
             
             bool update_health_display=false;
@@ -193,6 +194,7 @@ static void GameGUIStart() {
             // the linear interpolation is barely even noticable at 60 ticks
             if (client_st.NetState.snapshots.size() > 0) {
                 int interp_tick = target_tick-client_st.NetState.interp_delay;
+                int old_interp_tick = o_num-client_st.NetState.interp_delay;
                 game_state *prev_snap=nullptr;
                 game_state *next_snap=nullptr;
                 game_state *exac_snap=nullptr;
@@ -222,12 +224,14 @@ static void GameGUIStart() {
                 if (!exac_snap && (!next_snap || !prev_snap)){
                     printf("No snapshots to interpolate between\n");
                 } else {
-
                     FORn(gs.players,gs.player_count,chara) {
-                        if (chara==player || chara->curr_state == character::TAKING_DAMAGE) {
+                        if (chara->curr_state==character::TAKING_DAMAGE) {
                             continue;
                         }
-                        //update_player(
+                        if (chara==player) {
+                            continue;
+                        }
+
                         if (exac_snap) {
                             chara->pos = exac_snap->players[chara->id].pos;
                         } else if (next_snap && prev_snap) {
@@ -236,6 +240,24 @@ static void GameGUIStart() {
                             float f = (float)(interp_tick-prev_snap->tick) / (float)(next_snap->tick-prev_snap->tick);
                             player->pos = lerp(prev_pos,next_pos,f);
                         }
+                    }
+                }
+                
+                // process all command callbacks
+                for (i32 ind=0; ind<client_st.NetState.command_callback_info.size(); ind++) {
+                    auto p=client_st.NetState.command_callback_info[ind];
+                    if (p.second.tick <= interp_tick) {
+                        if (p.second.tick>=old_interp_tick) {
+                            // need a robust way to check if a sound has been processed or not already
+                            // on the client side
+                            if (p.first != player->id || p.second.code == CMD_DIE) {
+                                command_callback(&gs.players[p.first],p.second);
+                            }
+                        }
+                        // its probably processing the command, deleting it, and then recieving a new
+                        // one from the server (because the server buffers a couple ticks of the callbacks)
+                        client_st.NetState.command_callback_info.erase(client_st.NetState.command_callback_info.begin()+ind);
+                        ind--;
                     }
                 }
             }
@@ -256,7 +278,7 @@ static void GameGUIStart() {
             }
 
             if (o_num != target_tick) {
-                printf("Tick %d\n",target_tick);
+                //printf("Tick %d\n",target_tick);
                 if (input_send_timer.get() > input_send_delta) {
                     client_send_input(target_tick);
                     input_send_timer.add(input_send_delta);
@@ -305,8 +327,10 @@ static void GameGUIStart() {
             render_game_state(sdl_renderer,player);
             // gui
             SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
-            if (player && player->reloading) {
-                SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&gui_elements.reload_text.get_draw_rect());
+            if (player) {
+                if (player->reloading) {
+                    SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&gui_elements.reload_text.get_draw_rect());
+                }
             }
 
             // render the score at the end of the round
@@ -335,7 +359,10 @@ static void GameGUIStart() {
                 std::string cooldown_str;
                 for (i32 ind=0;ind<4;ind++) {
                     generic_drawable *sprite=&gui_elements.ability_sprites[ind];
-                    
+
+                    // render the box
+                    SDL_Rect dest = sprite->get_draw_rect();
+                    SDL_RenderCopy(sdl_renderer,textures[TexType::UI_TEXTURE],NULL,&dest);
                     SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sprite->get_draw_rect());
                     if (ind==0 && player->invisibility_cooldown > 0) {
                         render_ability_sprite(sprite,player->invisibility_cooldown,sdl_renderer);
@@ -347,6 +374,16 @@ static void GameGUIStart() {
                         render_ability_sprite(sprite,player->reload_timer,sdl_renderer);
                     }
                 }
+                local_persist i32 ammo_cnt = 0;
+                if (player->bullets_in_mag != ammo_cnt) {
+                    ammo_cnt = player->bullets_in_mag;
+                    std::string ammo_str = std::to_string(ammo_cnt);
+                    gui_elements.magazine_cnt_text = generate_text(sdl_renderer,m5x7,ammo_str,{255,255,255,255});
+                    gui_elements.magazine_cnt_text.scale = {4,4};
+                    auto ab_pos = gui_elements.ability_sprites[3].get_draw_rect();
+                    gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
+                }
+                SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&gui_elements.magazine_cnt_text.get_draw_rect());
             }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game

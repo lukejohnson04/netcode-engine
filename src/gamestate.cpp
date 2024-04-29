@@ -54,7 +54,7 @@ struct netstate_info_t {
     std::vector<command_t> command_buffer;
 
     std::vector<game_state> snapshots;
-    std::vector<command_t> new_commands_for_fx;
+    std::vector<std::pair<entity_id,command_t>> command_callback_info;
 
     bool authoritative=false;
     int interp_delay=0;
@@ -176,7 +176,7 @@ void game_state::update(netstate_info_t &c, double delta) {
     // add commands as the server
     if (c.authoritative) {
         FORn(players,player_count,player) {
-            if (player->health <= 0) {
+            if (player->health <= 0 && player->curr_state != character::DEAD) {
                 command_t kill_command = {CMD_DIE,false,gs.tick,player->id};
                 c.command_stack.push_back(kill_command);
             }
@@ -186,12 +186,25 @@ void game_state::update(netstate_info_t &c, double delta) {
     // process commands for this tick
     for (command_t &cmd: c.command_stack) {
         if (cmd.tick == tick) {
-            process_command(&players[cmd.sending_id],cmd);
+            if (process_command(&players[cmd.sending_id],cmd)) {
+                if (c.authoritative) {
+                    c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
+                } else {
+                    command_callback(&players[cmd.sending_id],cmd);
+                }
+            }
         }
     }
+    
     for (command_t &cmd: c.command_buffer) {
         if (cmd.tick == tick) {
-            process_command(&players[cmd.sending_id],cmd);
+            if (process_command(&players[cmd.sending_id],cmd)) {
+                if (c.authoritative) {
+                    c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
+                } else {
+                    command_callback(&players[cmd.sending_id],cmd);
+                }
+            }
         }
     }
 
@@ -199,7 +212,7 @@ void game_state::update(netstate_info_t &c, double delta) {
         if (gs.one_remaining_tick==0) {
             i32 living_player_count=0;
             character *last_alive=nullptr;
-            FORn(gs.players,gs.player_count,player){
+            FORn(gs.players,gs.player_count,player) {
                 if (player->curr_state!=character::DEAD) {
                     living_player_count++;
                     last_alive=player;
@@ -243,7 +256,7 @@ void game_state::update(netstate_info_t &c, double delta) {
             
         //} else {
         update_player(obj,delta,wall_count,walls,player_count,players);
-            //}
+        //}
     }
 
     FOR(bullets,bullet_count) {
@@ -266,6 +279,15 @@ void game_state::update(netstate_info_t &c, double delta) {
                 *obj = bullets[--bullet_count];
                 if (player->curr_state != character::SHIELD) {
                     player_take_damage(player,20);
+
+                    /*
+                    if (c.authoritative==false) {
+                        command_t temp;
+                        temp.code = CMD_TAKE_DAMAGE;
+                        temp.tick=tick;
+                        command_callback(player,temp);
+                    }
+                    */
                 }
                 break;
             }

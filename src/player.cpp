@@ -19,6 +19,7 @@ enum {
     // Server commands
     CMD_ADD_PLAYER,
     CMD_DIE,
+    CMD_TAKE_DAMAGE,
     
     CMD_COUNT,
 };
@@ -40,6 +41,7 @@ struct command_t {
     union {
         entity_id obj_id;
         float rot;
+        i32 damage;
     } props;
 };
 
@@ -139,8 +141,8 @@ void player_take_damage(character *player, int dmg) {
     player->damage_timer=0.5;
 }
 
-void process_command(character *player, command_t cmd) {
-    if (player->curr_state == character::DEAD) return;
+int process_command(character *player, command_t cmd) {
+    //if (player->curr_state == character::DEAD) return 0;
     
     if (cmd.code == CMD_PUNCH) {
         player->state.timer = 0.25;
@@ -152,39 +154,45 @@ void process_command(character *player, command_t cmd) {
         player->curr_state = character::DEAD;
     } else if (cmd.code == CMD_FIREBURST) {
         if (player->fireburst_cooldown > 0) {
-            return;
+            return 0;
         }
     } else if (cmd.code == CMD_SHIELD) {
         if (player->shield_cooldown > 0) {
-            return;
+            return 0;
         }
         player->curr_state = character::SHIELD;
         player->shield_timer = 1.0;
         player->shield_cooldown = shield_cooldown_length;
+    } else if (cmd.code == CMD_TAKE_DAMAGE) {
+        player_take_damage(player,cmd.props.damage);
+        player->curr_state = character::TAKING_DAMAGE;
     } else if (cmd.code == CMD_RELOAD) {
         if (player->reloading) {
             // cancel reload
             player->reloading=false;
+            return 0; // TODO: because this is a return 0, the return statement doesn't indicate whether
+            // the command was processed, but instead whether a sound should be made with it
         } else if (player->bullets_in_mag != 5 && player->reloading == false) {
             player->reloading = true;
             player->reload_timer=2.0;
         }
     } else if (cmd.code == CMD_INVISIBLE) {
         if (player->invisibility_cooldown > 0) {
-            return;
+            return 0;
         } if (player->curr_state == character::SHIELD) {
-            return;
+            return 0;
         }
         player->visible = false;
         player->invisibility_timer=2.5;
         player->invisibility_cooldown = invisibility_cooldown_length;
     } else if (cmd.code == CMD_FIREBURST) {
         // fuck this one actually lol
-        return;
+        return 0;
     } else {
         player->command_state[cmd.code] = cmd.press;
     }
-    command_callback(player,cmd);
+    return 1;
+    //command_callback(player,cmd);
 }
 
 
@@ -395,59 +403,3 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     player->shield_cooldown-=delta;
     player->fireburst_cooldown-=delta;
 }
-
-
-void rewind_player(character *player, double target_time, std::vector<command_t> &cmd_stack) {}
-/*
-    if (player->r_time < target_time) {
-        printf("rewinding into the future\n");
-    }
-    
-    // Update up to the next command. Repeat until there are no more commands
-    for (i32 ind=(i32)cmd_stack.size()-1; ind>=0; ind--) {
-        if (cmd_stack[ind].time > player->r_time) {
-            continue;
-        }
-        if (cmd_stack[ind].sending_id != player->id) {
-            continue;
-        } if (cmd_stack[ind].time < target_time) {
-            break;
-        } else if (cmd_stack[ind].time <= player->r_time) { 
-            update_player(player,(cmd_stack[ind].time-player->r_time));
-            unprocess_command(player,cmd_stack[ind]);
-            player->r_time = cmd_stack[ind].time;
-        }
-    }
-
-    if (player->r_time > target_time) {
-        update_player(player,(target_time-player->r_time));
-    }
-    player->r_time = target_time;
-}
-*/
-
-
-// fast forwards the player up to the given end time
-void fast_forward_player(character *player, double end_time, std::vector<command_t> &cmd_stack) {}
-/*
-    if (player->r_time > end_time) {
-        printf("fast forwarding into the past\n");
-    }
-    for (i32 ind=0; ind<cmd_stack.size(); ind++) {
-        if (cmd_stack[ind].sending_id != player->id) {
-            continue;
-        } if (cmd_stack[ind].time > end_time) {
-            break;
-        } else if (cmd_stack[ind].time >= player->r_time) {
-            update_player(player,(cmd_stack[ind].time-player->r_time,gs.wall_count,gs.walls));
-            process_command(player,cmd_stack[ind]);
-        }
-    }
-
-    if (player->r_time < end_time) {
-        update_player(player,(end_time-player->r_time));
-    }
-    player->r_time = end_time;
-}
-
-*/
