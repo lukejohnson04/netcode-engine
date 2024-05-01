@@ -215,7 +215,7 @@ int process_command(character *player, command_t cmd) {
   }
 */
 
-void update_player_controller(character *player, int tick) {
+void update_player_controller(character *player, int tick, camera_t *game_camera=nullptr) {
     // 16 max commands a tick
     command_t new_commands[16];
     u32 cmd_count=0;
@@ -242,6 +242,9 @@ void update_player_controller(character *player, int tick) {
             // make clicking sound effect
         } else {
             v2i mPos = get_mouse_position();
+            if (game_camera) {
+                mPos = v2i((int)(mPos.x + (game_camera->pos.x-1280/2)),(int)(mPos.y + (game_camera->pos.y-720/2)));
+            }
             float rot = get_angle_to_point(player->pos+v2(16,16)+v2(8,8),mPos);
 
             new_commands[cmd_count++] = {CMD_SHOOT,true,tick,player->id};

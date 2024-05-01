@@ -110,6 +110,8 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
     printf("ERROR: Cannot rewind game state!\n");
 }
 
+
+
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = ROUND_PLAYING;
     i32 rand_level = rand() % 4;    
@@ -168,6 +170,7 @@ void load_gamestate_for_round(overall_game_manager &gms) {
     gs.round_start_tick = gs.tick + 300;
 }
 
+//#define GAME_CAN_END
 
 void game_state::update(netstate_info_t &c, double delta) {
     if (tick < round_start_tick) {
@@ -208,6 +211,7 @@ void game_state::update(netstate_info_t &c, double delta) {
         }
     }
 
+#ifdef GAME_CAN_END
     if (c.authoritative) {
         if (gs.one_remaining_tick==0) {
             i32 living_player_count=0;
@@ -245,6 +249,7 @@ void game_state::update(netstate_info_t &c, double delta) {
             }
         }
     }
+#endif
 
     // interp delay in ticks
     int interp_delay = 6;//c.interp_delay;
@@ -321,17 +326,20 @@ struct {
 } client_sided_render_geometry;
 
 
-void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspective_of=nullptr) {
+void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr) {
     // Render start
     SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
     SDL_RenderClear(sdl_renderer);
+
+    v2i cam_mod = {0,0};
+    if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
     
     for (i32 id=0; id<gs.player_count; id++) {
         character &p = gs.players[id];
         if (p.visible == false) continue;
 
         SDL_Rect src_rect = {p.curr_state == character::PUNCHING ? 64 : p.curr_state == character::SHIELD ? 96 : 0,p.curr_state == character::TAKING_DAMAGE ? 32 : 0,32,32};
-        SDL_Rect rect = {(int)p.pos.x,(int)p.pos.y,64,64};
+        SDL_Rect rect = {(int)p.pos.x+cam_mod.x,(int)p.pos.y+cam_mod.y,64,64};
         if (p.damage_timer) {
             u8 g = (u8)lerp(p.color.g-75.f,(float)p.color.g,(0.5f-(float)p.damage_timer)*(1.f/0.5f));
             u8 b = (u8)lerp(p.color.b-105.f,(float)p.color.b,(0.5f-(float)p.damage_timer)*(1.f/0.5f));
@@ -345,12 +353,12 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
     for (i32 ind=0; ind<gs.wall_count; ind++) {
         SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
 
-        SDL_Rect rect = {(int)gs.walls[ind].x*64,(int)gs.walls[ind].y*64,64,64};
+        SDL_Rect rect = {(int)gs.walls[ind].x*64+cam_mod.x,(int)gs.walls[ind].y*64+cam_mod.y,64,64};
         SDL_RenderFillRect(sdl_renderer, &rect);
     }
 
     for (i32 ind=0; ind<gs.bullet_count; ind++) {
-        SDL_Rect rect = {(int)gs.bullets[ind].position.x,(int)gs.bullets[ind].position.y,16,16};
+        SDL_Rect rect = {(int)gs.bullets[ind].position.x+cam_mod.x,(int)gs.bullets[ind].position.y+cam_mod.y,16,16};
         SDL_Point center = {8,8};
         float rad_rot = convert_vec_to_angle(gs.bullets[ind].vel)+PI;
         SDL_RenderCopyEx(sdl_renderer,textures[BULLET_TEXTURE],NULL,&rect,rad_2_deg(rad_rot),&center,SDL_FLIP_NONE);
@@ -426,8 +434,8 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         }        
     
         SDL_SetRenderTarget(sdl_renderer,NULL);
-        SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
-        //SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_NONE);
+        SDL_Rect shadow_rect = {cam_mod.x,cam_mod.y,1280,720};
+        SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,&shadow_rect);
 
 
         /*
@@ -463,7 +471,6 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         round_start_timer.position = {1280/2-round_start_timer.get_draw_rect().w/2,720/2-round_start_timer.get_draw_rect().h/2};
         SDL_RenderCopy(sdl_renderer,round_start_timer.texture,NULL,&round_start_timer.get_draw_rect());
     }
-
 
 }
 

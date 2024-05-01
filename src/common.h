@@ -127,6 +127,14 @@ inline v2 &operator*=(v2 &v, float mult) {
 }
 
 
+inline v2i &operator+=(v2i &left, v2i right) {
+    left.x += right.x;
+    left.y += right.y;
+    return left;
+}
+
+
+
 struct iRect {
     int x,y,w,h;
 };

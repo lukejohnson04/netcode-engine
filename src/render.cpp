@@ -66,6 +66,26 @@ Uint32 getpixel(SDL_Surface *surface, int x, int y) {
     }
 }
 
+
+struct character;
+struct camera_t {
+    v2 pos={0,0};
+    v2 size = {1280,720};
+    union {
+        character *follow;
+    };
+    
+    iRect get_draw_rect() {
+        return {(int)(pos.x-size.x/2),(int)(pos.y-size.y/2),(int)size.x,(int)size.y};
+    }
+
+    v2 get_center() {
+        return pos + (v2(size.x/2.f,size.y/2.f));
+    }
+};
+
+camera_t *global_cam=nullptr;
+
 struct generic_drawable {
     v2i position={0,0};
     SDL_Texture *texture=nullptr;
@@ -114,3 +134,4 @@ void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *s
         SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cooldown_text.get_draw_rect());
     }
 }
+

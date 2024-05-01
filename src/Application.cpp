@@ -147,6 +147,8 @@ static void GameGUIStart() {
         sprite.position = {1280-16-((4-ind)*sprite.get_draw_rect().w),720-16-sprite.get_draw_rect().h};
     }
 
+    camera_t game_camera;
+
     
     while (running) {
         // input
@@ -158,7 +160,7 @@ static void GameGUIStart() {
 
         if (client_st.gms.state == GMS::ROUND_PLAYING) {
             i32 prev_wall_count=gs.wall_count;
-            update_player_controller(player,target_tick);
+            update_player_controller(player,target_tick,&game_camera);
             if (client_snapshot_buffer_stack.size() > 0) {
                 for (auto &snap:client_snapshot_buffer_stack) {
                     client_st.NetState.snapshots.push_back(snap);
@@ -275,6 +277,7 @@ static void GameGUIStart() {
                     }
                     gui_elements.reload_text = generate_text(sdl_renderer,m5x7,reload_str,{255,0,0,255});
                     gui_elements.reload_text.position = player->pos + v2i(16-8,48);
+                    gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
                 }
             }
 
@@ -370,7 +373,12 @@ static void GameGUIStart() {
                 client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
                 printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
-            render_game_state(sdl_renderer,player);
+
+            if (player) {
+                game_camera.follow = player;
+                game_camera.pos = game_camera.follow->pos;
+            }
+            render_game_state(sdl_renderer,player,&game_camera);
             // gui
             SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
             if (player) {
