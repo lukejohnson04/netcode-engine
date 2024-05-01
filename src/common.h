@@ -255,7 +255,7 @@ struct intersect_props {
 
 
 double distance_between_points(v2 p1, v2 p2) {
-    return (double)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
+    return sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
 }
 
 float cross_product(v2i a, v2i b) {
@@ -289,46 +289,78 @@ intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i 
     return result;
 }
 
-intersect_props get_collision(v2i from, v2i to, v2i *walls, int n) {
+/*
+
+  This function also works... i guess... not really.. lol
+intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
+    intersect_props res;
+    res.collides = false;
+
+    // RAY in parametric: Point + Delta*T1
+    double r_px = ray_start.x;
+    double r_py = ray_start.y;
+    double r_dx = ray_end.x-ray_start.x;
+    double r_dy = ray_end.y-ray_start.y;
+
+    // SEGMENT in parametric: Point + Delta*T2
+    double s_px = seg_start.x;
+    double s_py = seg_start.y;
+    double s_dx = seg_end.x-seg_start.x;
+    double s_dy = seg_end.y-seg_start.y;
+
+    // Are they parallel? If so, no intersect
+    double r_mag = sqrt(r_dx*r_dx+r_dy*r_dy);
+    double s_mag = sqrt(s_dx*s_dx+s_dy*s_dy);
+    if(r_dx/r_mag==s_dx/s_mag && r_dy/r_mag==s_dy/s_mag){
+        // Unit vectors are the same.
+        return res;
+    }
+
+    // SOLVE FOR T1 & T2
+    // r_px+r_dx*T1 = s_px+s_dx*T2 && r_py+r_dy*T1 = s_py+s_dy*T2
+    // ==> T1 = (s_px+s_dx*T2-r_px)/r_dx = (s_py+s_dy*T2-r_py)/r_dy
+    // ==> s_px*r_dy + s_dx*T2*r_dy - r_px*r_dy = s_py*r_dx + s_dy*T2*r_dx - r_py*r_dx
+    // ==> T2 = (r_dx*(s_py-r_py) + r_dy*(r_px-s_px))/(s_dx*r_dy - s_dy*r_dx)
+    double T2 = (r_dx*(s_py-r_py) + r_dy*(r_px-s_px))/(s_dx*r_dy - s_dy*r_dx);
+    double T1 = (s_px+s_dx*T2-r_px)/r_dx;
+
+    // Must be within parametic whatevers for RAY/SEGMENT
+    if(T1<0) return res;
+    if(T2<0 || T2>1) return res;
+
+    res.collides = true;
+    // Return the POINT OF INTERSECTION
+    res.collision_point.x = (float)(r_px+r_dx*T1);
+    res.collision_point.y = (float)(r_py+r_dy*T1);
+    return res;
+}
+*/
+
+
+struct segment {
+    v2 p1,p2;
+    bool operator ==(const segment&o) {
+        return p1==o.p1&&p2==o.p2;
+    }
+};
+
+intersect_props get_collision(v2i from, v2 to, std::vector<segment> segments) {
     intersect_props res;
     res.collides=false;
 
-    i32 c_count=0;
-    v2i collisions[64];
-    for (i32 ind=0; ind<n; ind++) {
-        v2i *wall=&walls[ind];
-        v2i p1 = v2i(wall->x,wall->y)*64;
-        v2i p2 = v2i(wall->x+1,wall->y)*64;
-        v2i p3 = v2i(wall->x,wall->y+1)*64;
-        v2i p4 = v2i(wall->x+1,wall->y+1)*64;
-        
-        intersect_props col1 = get_intersection(from,to,p1,p2);
-        intersect_props col2 = get_intersection(from,to,p1,p3);
-        intersect_props col3 = get_intersection(from,to,p2,p4);
-        intersect_props col4 = get_intersection(from,to,p3,p4);
-        
-        if (col1.collides) {
-            collisions[c_count++] = col1.collision_point;
-        } if (col2.collides) {
-            collisions[c_count++] = col2.collision_point;
-        } if (col3.collides) {
-            collisions[c_count++] = col3.collision_point;
-        } if (col4.collides) {
-            collisions[c_count++] = col4.collision_point;
+    double closest = -1;
+    
+    for (i32 ind=0; ind<segments.size(); ind++) {
+        segment seg = segments[ind];
+        intersect_props col = get_intersection(from,to,seg.p1,seg.p2);
+        if (col.collides) {
+            double dist = distance_between_points(from,col.collision_point);
+            if (res.collides==false || dist<=closest) {
+                closest = dist;
+                res = col;
+            }
         }
     }
 
-    if (c_count==0) return res;
-    res.collides=true;
-    res.collision_point = collisions[0];
-    double closest=distance_between_points(from,collisions[0]);
-    
-    for (i32 n=1;n<c_count;n++) {
-        double d = distance_between_points(from,collisions[n]);
-        if (d<closest) {
-            res.collision_point = collisions[n];
-            closest=d;
-        }
-    }
     return res;
 }

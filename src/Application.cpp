@@ -17,7 +17,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <iostream>
@@ -90,7 +90,8 @@ static void GameGUIStart() {
 
     SDL_Renderer* sdl_renderer;
 
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    // SDL_RENDERER_PRESENTVSYNC | 
+    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (sdl_renderer == nullptr) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         return;
@@ -289,18 +290,24 @@ static void GameGUIStart() {
                 // regenerate raycast points
                 auto &rps = client_sided_render_geometry.raycast_points;
                 rps.clear();
+                client_sided_render_geometry.segments.clear();
                 for (i32 n=0; n<gs.wall_count; n++) {
                     v2i &wall=gs.walls[n];
-                    rps.push_back(v2i(wall.x,wall.y)*64);
-                    rps.push_back(v2i(wall.x+1,wall.y)*64);
-                    rps.push_back(v2i(wall.x,wall.y+1)*64);
-                    rps.push_back(v2i(wall.x+1,wall.y+1)*64);
+                    rps.push_back(v2(wall.x,wall.y)*64);
+                    rps.push_back(v2(wall.x+1,wall.y)*64);
+                    rps.push_back(v2(wall.x,wall.y+1)*64);
+                    rps.push_back(v2(wall.x+1,wall.y+1)*64);
                 }
                 printf("Points before: %d\n",(i32)rps.size());
                 std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
                   return *(double*)&left < *(double*)&right;
                 });
-                
+                std::unordered_map<double,int> p_set;
+                for (auto &p:rps) p_set[*(double*)&p]++;
+
+
+
+                // removes all points surrounded by tiles
                 for (auto pt=rps.begin();pt<rps.end();pt++) {
                     i32 dupes=0;
                     if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
@@ -322,7 +329,46 @@ static void GameGUIStart() {
                     }
                     
                 }
+                
+                for (i32 ind=0; ind<gs.wall_count; ind++) {
+                    v2 wall=gs.walls[ind];
+                    v2 p1 = v2(wall.x,wall.y)*64;
+                    v2 p2 = v2(wall.x+1,wall.y)*64;
+                    v2 p3 = v2(wall.x,wall.y+1)*64;
+                    v2 p4 = v2(wall.x+1,wall.y+1)*64;
+
+                    bool fp1 = p_set[*(double*)&p1] != 4;
+                    bool fp2 = p_set[*(double*)&p2] != 4;
+                    bool fp3 = p_set[*(double*)&p3] != 4;
+                    bool fp4 = p_set[*(double*)&p4] != 4;
+
+                    if (fp1) {
+                        if (fp2)
+                            client_sided_render_geometry.segments.push_back({p1,p2});
+                        if (fp3)
+                            client_sided_render_geometry.segments.push_back({p1,p3});
+                    } if (fp4) {
+                        if (fp2)
+                            client_sided_render_geometry.segments.push_back({p2,p4});
+                        if (fp3)
+                            client_sided_render_geometry.segments.push_back({p3,p4});
+                    }
+                }
+                
+                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+                    return *(double*)&left < *(double*)&right;
+                });
+
+                rps.erase(unique(rps.begin(),rps.end()),rps.end());
+                
                 printf("Points after: %d\n",(i32)rps.size());
+
+                std::sort( client_sided_render_geometry.segments.begin(), client_sided_render_geometry.segments.end(), [](auto&left,auto&right){
+                    return (*(double*)&left.p1 + *(double*)&left.p2) < (*(double*)&right.p1 + *(double*)&right.p2);
+                });
+                i32 s = (i32)client_sided_render_geometry.segments.size();
+                client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
+                printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
             render_game_state(sdl_renderer,player);
             // gui
@@ -500,6 +546,20 @@ static void demo() {
     walls[wall_count++] = {15,9};
 
 
+    for (i32 ind=0; ind<wall_count; ind++) {
+        
+        v2 wall=walls[ind];
+        v2 p1 = v2(wall.x,wall.y)*64;
+        v2 p2 = v2(wall.x+1,wall.y)*64;
+        v2 p3 = v2(wall.x,wall.y+1)*64;
+        v2 p4 = v2(wall.x+1,wall.y+1)*64;
+
+        client_sided_render_geometry.segments.push_back({p1,p2});
+        client_sided_render_geometry.segments.push_back({p1,p3});
+        client_sided_render_geometry.segments.push_back({p2,p4});
+        client_sided_render_geometry.segments.push_back({p3,p4});
+    }
+
     SDL_Texture *dot = IMG_LoadTexture(sdl_renderer,"res/dot.png");
     
     while (running) {
@@ -557,7 +617,7 @@ static void demo() {
                 t*=64;
             }
             
-            intersect_props col = get_collision(mpos,t,walls,wall_count);
+            intersect_props col = get_collision(mpos,t,client_sided_render_geometry.segments);
             v2i pt;
             if (!col.collides) {
                 if (n < pt_count) {
@@ -571,8 +631,8 @@ static void demo() {
             // two slightly off points
             v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(mpos,t) + 0.005f) * 2000.f) + mpos;
             v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(mpos,t) - 0.005f) * 2000.f) + mpos;
-            intersect_props col_2 = get_collision(mpos,pt_2,walls,wall_count);
-            intersect_props col_3 = get_collision(mpos,pt_3,walls,wall_count);
+            intersect_props col_2 = get_collision(mpos,pt_2,client_sided_render_geometry.segments);
+            intersect_props col_3 = get_collision(mpos,pt_3,client_sided_render_geometry.segments);
             if (col_2.collides==false) {
                 dests.push_back(v2(pt_2-mpos).normalize() * 1500.f + mpos);
             } else {

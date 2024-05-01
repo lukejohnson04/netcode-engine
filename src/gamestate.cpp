@@ -308,8 +308,16 @@ int collision_point_sort(const void *v1, const void*v2) {
     return (int)((get_angle_to_point(pp,p1)-get_angle_to_point(pp,p2))*1000.f);
 }
 
+
+struct col_target {
+    v2 pt;
+    double angle;
+};
+
+
 struct {
-    std::vector<v2i> raycast_points;
+    std::vector<v2> raycast_points;
+    std::vector<segment> segments;
 } client_sided_render_geometry;
 
 
@@ -357,120 +365,82 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         SDL_RenderFillRect(sdl_renderer,NULL);
         
         v2i p_pos = render_from_perspective_of->pos + v2(32,32);
-        
-        std::vector<v2i> dests;
-        
-        for (v2i temp_t: client_sided_render_geometry.raycast_points) {
+        static std::vector<col_target> dests;
+        for (auto temp_t: client_sided_render_geometry.raycast_points) {
+            
+            col_target c1,c2,c3;
             v2 t=temp_t;
-            //i32 p = n%4;
-            //i32 wall_num = (i32)floor((float)n/4.f);
-            //t = p==0?v2(wall.x,wall.y):p==1?v2(wall.x+1,wall.y):p==2?v2(wall.x,wall.y+1):v2(wall.x+1,wall.y+1);
             
-            // if the corner is shared continue
-            // TODO: Bake the walls when the level is first loaded
-            // FPS goes back up to constant 144 if you just remove
-            // unecessary walls, i.e. we don't need to send 12 rays
-            // to a block that's in the edge.
-            /*
-            bool shared=false;
-            for (i32 j=0;j<gs.wall_count;j++) {
-                if (j==wall_num) continue;
-                if (gs.walls[j].x != wall.x && gs.walls[j].y != wall.y) continue;
-                v2 tp_1 = v2(gs.walls[j].x,  gs.walls[j].y);
-                v2 tp_2 = v2(gs.walls[j].x+1,gs.walls[j].y);
-                v2 tp_3 = v2(gs.walls[j].x,  gs.walls[j].y+1);
-                v2 tp_4 = v2(gs.walls[j].x+1,gs.walls[j].y+1);
-                if (t==tp_1||t==tp_2||t==tp_3||t==tp_4) {
-                    shared=true;
-                    break;
-                }
-            }
-            if (shared) continue;
-            t*=64;
-            */
-            
-            intersect_props col = get_collision(p_pos,t,gs.walls,gs.wall_count);
-            v2i pt;
+            c1.angle = get_angle_to_point(p_pos,t);
+            intersect_props col = get_collision(p_pos,t,client_sided_render_geometry.segments);
             if (!col.collides) {
                 printf("ERROR\n");
+                c1.pt = v2(c1.pt-p_pos).normalize() * 1500.f + p_pos;
             } else {
-                pt = v2(col.collision_point.x,col.collision_point.y);
+                c1.pt = v2(col.collision_point.x,col.collision_point.y);
+                if (col.collision_point != t) {
+                    dests.push_back(c1);
+                    continue;
+                }
             }
 
-            v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(p_pos,t) + 0.005f) * 2000.0f) + p_pos;
-            v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(p_pos,t) - 0.005f) * 2000.0f) + p_pos;
-            intersect_props col_2 = get_collision(p_pos,pt_2,gs.walls,gs.wall_count);
-            intersect_props col_3 = get_collision(p_pos,pt_3,gs.walls,gs.wall_count);
-            if (col_2.collides==false) {
-                printf("ERROR\n");
-                dests.push_back(v2(pt_2-p_pos).normalize() * 1500.f + p_pos);
-            } else {
-                dests.push_back(col_2.collision_point);
+            c2.angle = c1.angle + 0.005f;
+            c3.angle = c1.angle - 0.005f;
+            c2.pt = (dconvert_angle_to_vec(c2.angle) * 2000.0f) + p_pos;
+            c3.pt = (dconvert_angle_to_vec(c3.angle) * 2000.0f) + p_pos;
+            intersect_props col_2 = get_collision(p_pos,c2.pt,client_sided_render_geometry.segments);
+            intersect_props col_3 = get_collision(p_pos,c3.pt,client_sided_render_geometry.segments);
+            if (col_2.collides) {
+                c2.pt = col_2.collision_point;
             }
-            if (col_3.collides==false) {
-                printf("ERROR\n");
-                dests.push_back(v2(pt_3-p_pos).normalize() * 1500.f + p_pos);
-            } else {
-                dests.push_back(col_3.collision_point);
-            }
-            
-            dests.push_back(pt);
-
-            /*
-            // two slightly off points
-            v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(p_pos,t) + 0.005f) * 2000.f) + p_pos;
-            v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(p_pos,t) - 0.005f) * 2000.f) + p_pos;
-            intersect_props col_2 = get_collision(p_pos,pt_2,gs.walls,gs.wall_count);
-            intersect_props col_3 = get_collision(p_pos,pt_3,gs.walls,gs.wall_count);
-            
-            if (col_2.collides==false) {
-                dests.push_back(v2(pt_2-p_pos).normalize() * 1500.f + p_pos);
-            } else {
-                dests.push_back(col_2.collision_point);
-            }
-            if (col_3.collides==false) {
-                dests.push_back((pt_3-p_pos).normalize() * 1500.f + p_pos);
-            } else {
-                dests.push_back(col_3.collision_point);
+            if (col_3.collides) {
+                c3.pt = col_3.collision_point;
             }
 
-            dests.push_back(pt);
-            */
+            dests.push_back(c3);
+            dests.push_back(c1);
+            dests.push_back(c2);
         }
 
 
         // if we sort beforehand and then just add inorder we can reduce the sort size by
         // a factor of 3
-        std::sort(dests.begin(),dests.end(),[p_pos](auto &left, auto &right) {
-            return get_angle_to_point(p_pos,left)<get_angle_to_point(p_pos,right);
+        std::sort(dests.begin(),dests.end(),[](auto &left, auto &right) {
+            return left.angle < right.angle;
         });
+        
 
 
-        SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_ADD);
+        //SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_ADD);
         for (i32 n=0;n<dests.size()+1;n++) {
             bool fin=n==dests.size();
             if (fin) n=0;
-            v2i pt=dests[n];
-            v2i prev_point=n==0?dests.back():dests[n-1];
+            v2 pt=dests[n].pt;
+            v2 prev_point=n==0?dests.back().pt:dests[n-1].pt;
             SDL_Vertex vertex_1 = {{(float)p_pos.x,(float)p_pos.y}, white, {1, 1}};
             SDL_Vertex vertex_2 = {{(float)pt.x,(float)pt.y}, white, {1, 1}};
             SDL_Vertex vertex_3 = {{(float)prev_point.x,(float)prev_point.y}, white, {1, 1}};
-            SDL_Vertex vertices[] = {vertex_1,vertex_2,vertex_3};
+            SDL_Vertex vertices[3] = {vertex_1,vertex_2,vertex_3};
             SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
             if (fin) break;
         }        
-
+    
         SDL_SetRenderTarget(sdl_renderer,NULL);
         SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
-        SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_NONE);
+        //SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_NONE);
+
+
         /*
-        for (auto &pt: dests) {
+        for (auto &dest: dests) {
+            v2i pt = dest.pt;
             SDL_Rect dest = {(i32)pt.x-8,(i32)pt.y-8,16,16};
             SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
             SDL_RenderDrawLine(sdl_renderer,(int)p_pos.x,(int)p_pos.y,(int)pt.x,(int)pt.y);
             SDL_RenderCopy(sdl_renderer,textures[RAYCAST_DOT_TEXTURE],NULL,&dest);
         }
         */
+        
+        
         dests.clear();
     }
 
