@@ -179,7 +179,6 @@ static void GameGUIStart() {
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
-            
             while(gs.tick<target_tick) {
                 gs.update(client_st.NetState,tick_delta);
                 gs.tick++;
@@ -295,7 +294,7 @@ static void GameGUIStart() {
                 rps.clear();
                 client_sided_render_geometry.segments.clear();
                 for (i32 n=0; n<gs.wall_count; n++) {
-                    v2i &wall=gs.walls[n];
+                    v2i wall=gs.walls[n];
                     rps.push_back(v2(wall.x,wall.y)*64);
                     rps.push_back(v2(wall.x+1,wall.y)*64);
                     rps.push_back(v2(wall.x,wall.y+1)*64);
@@ -307,8 +306,6 @@ static void GameGUIStart() {
                 });
                 std::unordered_map<double,int> p_set;
                 for (auto &p:rps) p_set[*(double*)&p]++;
-
-
 
                 // removes all points surrounded by tiles
                 for (auto pt=rps.begin();pt<rps.end();pt++) {
@@ -620,7 +617,7 @@ static void demo() {
             if (n>=pt_count) {
                 t = p==0?v2(0,0):p==1?v2(1280,0):p==2?v2(0,720):v2(1280,720);
             } else {
-                v2i &wall = walls[(i32)floor((float)n/4.f)];
+                v2i wall = walls[(i32)floor((float)n/4.f)];
                 t = p==0?v2(wall.x,wall.y):p==1?v2(wall.x+1,wall.y):p==2?v2(wall.x,wall.y+1):v2(wall.x+1,wall.y+1);
                 t*=64;
             }

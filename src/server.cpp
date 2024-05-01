@@ -309,9 +309,9 @@ static void server() {
             if (snap_clock.get() > snap_delta) {
                 snap_clock.Restart();
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
+                printf("%d\n",gs.wall_count);
 
-                if (target_tick-snapshot_buffer > 0) {
-                    
+                if (target_tick-snapshot_buffer > 0) {                    
                     gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
 
                     // send the last 6 ticks worth of snapshots
@@ -325,10 +325,10 @@ static void server() {
                         p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
                         last_sent_snapshot_tick = p.data.snapshot.tick;
 
-                        printf("Sending snapshots for %d\n",p.data.snapshot.tick);
+                        //printf("Sending snapshots for %d\n",p.data.snapshot.tick);
                         broadcast(&p);
-                        // send important command data
 
+                        // send important command data
                         p = {};
                         p.type = COMMAND_CALLBACK_INFO;
                         p.data.command_callback_info.count = (i32)gl_server.NetState.command_callback_info.size();
@@ -343,6 +343,7 @@ static void server() {
                             p.data.command_callback_info.commands[ind]=pr.second;
                         }
                         broadcast(&p);
+
                     }
                 }
                 new_frame_ready=true;

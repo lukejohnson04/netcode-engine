@@ -1,14 +1,13 @@
 
 struct netstate_info_t;
 
-
 // should be called world state instead of game state
 struct game_state {
     i32 player_count=0;
     character players[8];
 
     i32 wall_count=0;
-    v2i walls[240];
+    v2i walls[512];
 
     i32 bullet_count=0;
     bullet_t bullets[128];
@@ -18,10 +17,14 @@ struct game_state {
     double time=0;
     int tick=0;
 
+    i32 bombsite_count=0;
+    v2i bombsite[64];
+
     int round_start_tick=0;
     int one_remaining_tick=0;
 
     void update(netstate_info_t &c, double delta);
+    //void update_player(character *player, double delta, netstate_info_t &c);
 };
 
 enum GMS {
@@ -55,6 +58,7 @@ struct netstate_info_t {
 
     std::vector<game_state> snapshots;
     std::vector<std::pair<entity_id,command_t>> command_callback_info;
+    std::vector<pseudo_command> pseudo_commands;
 
     bool authoritative=false;
     int interp_delay=0;
@@ -98,6 +102,10 @@ static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
     bullet.shooter_id = shooter_id;
 }
 
+internal void queue_sound(SfxType type, i32 tick) {
+    sound_queue.push_back({type,tick});
+}
+
 
 static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
     for (i32 ind=(i32)c.snapshots.size()-1;ind>=0;ind--) {
@@ -111,29 +119,29 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
 }
 
 
-
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = ROUND_PLAYING;
-    i32 rand_level = rand() % 4;    
-    SDL_Surface *level_surface = IMG_Load("res/levels.png");
+    SDL_Surface *level_surface = IMG_Load("res/map.png");
 
     gs.bullet_count=0;
     gs.wall_count=0;
     gs.one_remaining_tick=0;
-
+    gs.bombsite_count=0;
 
     i32 spawn_count=0;
     v2i spawns[8]={{0,0}};
     
-    for (i32 x=0; x<20; x++) {
-        for (i32 y=0; y<12; y++) {
+    for (i32 x=0; x<32; x++) {
+        for (i32 y=0; y<32; y++) {
             Color col = {0,0,0,0};
-            Uint32 data = getpixel(level_surface, x+(20*rand_level),y);
+            Uint32 data = getpixel(level_surface, x,y);
             SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
             if (col == Color(0,0,0,255)) {
                 add_wall({x,y});
             } else if (col == Color(255,0,0,255)) {
                 spawns[spawn_count++] = {x,y};
+            } else if (col == Color(0,0,255,255)) {
+                gs.bombsite[gs.bombsite_count++] = {x,y};
             }
         }
     }
@@ -170,11 +178,13 @@ void load_gamestate_for_round(overall_game_manager &gms) {
     gs.round_start_tick = gs.tick + 300;
 }
 
-//#define GAME_CAN_END
 
+//#define GAME_CAN_END
 void game_state::update(netstate_info_t &c, double delta) {
     if (tick < round_start_tick) {
         return;
+    } else if (tick == round_start_tick) {
+        printf("%d, ",wall_count);
     }
     // add commands as the server
     if (c.authoritative) {
@@ -190,7 +200,9 @@ void game_state::update(netstate_info_t &c, double delta) {
     for (command_t &cmd: c.command_stack) {
         if (cmd.tick == tick) {
             if (process_command(&players[cmd.sending_id],cmd)) {
+                if (cmd.code == CMD_PLANT) continue;
                 if (c.authoritative) {
+                    // need a pseudo command
                     c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
                 } else {
                     command_callback(&players[cmd.sending_id],cmd);
@@ -202,6 +214,7 @@ void game_state::update(netstate_info_t &c, double delta) {
     for (command_t &cmd: c.command_buffer) {
         if (cmd.tick == tick) {
             if (process_command(&players[cmd.sending_id],cmd)) {
+                if (cmd.code == CMD_PLANT) continue;
                 if (c.authoritative) {
                     c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
                 } else {
@@ -252,16 +265,10 @@ void game_state::update(netstate_info_t &c, double delta) {
 #endif
 
     // interp delay in ticks
-    int interp_delay = 6;//c.interp_delay;
-    int interp_players=0;
-    int interp_tick=tick-interp_delay;
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
-        //if (c.do_charas_interp[obj->id] && !c.authoritative && c.snapshots.size() > 0) {
-            
-        //} else {
-        update_player(obj,delta,wall_count,walls,player_count,players);
-        //}
+        bool planting_before_update = obj->curr_state == character::PLANTING;
+        update_player(obj,delta,wall_count,walls,player_count,players,bombsite_count,bombsite);
     }
 
     FOR(bullets,bullet_count) {
@@ -275,7 +282,7 @@ void game_state::update(netstate_info_t &c, double delta) {
                 break;
             }
         }
-        FORn(players,wall_count,player) {
+        FORn(players,player_count,player) {
             if (player->id==obj->shooter_id) continue;
             fRect b_hitbox = {obj->position.x,obj->position.y,16.f,16.f};
             fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
@@ -284,15 +291,6 @@ void game_state::update(netstate_info_t &c, double delta) {
                 *obj = bullets[--bullet_count];
                 if (player->curr_state != character::SHIELD) {
                     player_take_damage(player,20);
-
-                    /*
-                    if (c.authoritative==false) {
-                        command_t temp;
-                        temp.code = CMD_TAKE_DAMAGE;
-                        temp.tick=tick;
-                        command_callback(player,temp);
-                    }
-                    */
                 }
                 break;
             }
@@ -333,6 +331,20 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
     v2i cam_mod = {0,0};
     if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
+
+    for (i32 ind=0; ind<gs.wall_count; ind++) {
+        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+
+        SDL_Rect rect = {(int)gs.walls[ind].x*64+cam_mod.x,(int)gs.walls[ind].y*64+cam_mod.y,64,64};
+        SDL_RenderFillRect(sdl_renderer, &rect);
+    }
+
+    for (i32 ind=0; ind<gs.bombsite_count; ind++) {
+        SDL_SetRenderDrawColor(sdl_renderer,0,0,255,255);
+
+        SDL_Rect rect = {(int)gs.bombsite[ind].x*64+cam_mod.x,(int)gs.bombsite[ind].y*64+cam_mod.y,64,64};
+        SDL_RenderFillRect(sdl_renderer, &rect);
+    }
     
     for (i32 id=0; id<gs.player_count; id++) {
         character &p = gs.players[id];
@@ -350,13 +362,6 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         SDL_RenderCopyEx(sdl_renderer,textures[PLAYER_TEXTURE],&src_rect,&rect,NULL,NULL,p.flip?SDL_FLIP_HORIZONTAL:SDL_FLIP_NONE);
     }
 
-    for (i32 ind=0; ind<gs.wall_count; ind++) {
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
-
-        SDL_Rect rect = {(int)gs.walls[ind].x*64+cam_mod.x,(int)gs.walls[ind].y*64+cam_mod.y,64,64};
-        SDL_RenderFillRect(sdl_renderer, &rect);
-    }
-
     for (i32 ind=0; ind<gs.bullet_count; ind++) {
         SDL_Rect rect = {(int)gs.bullets[ind].position.x+cam_mod.x,(int)gs.bullets[ind].position.y+cam_mod.y,16,16};
         SDL_Point center = {8,8};
@@ -369,18 +374,19 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
         SDL_SetRenderTarget(sdl_renderer,textures[SHADOW_TEXTURE]);
         SDL_RenderClear(sdl_renderer);
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);        
+        SDL_SetRenderDrawColor(sdl_renderer,50,50,50,255);
         SDL_RenderFillRect(sdl_renderer,NULL);
         
         v2i p_pos = render_from_perspective_of->pos + v2(32,32);
-        static std::vector<col_target> dests;
-        for (auto temp_t: client_sided_render_geometry.raycast_points) {
-            
+        std::vector<col_target> dests;
+
+        for (auto t: client_sided_render_geometry.raycast_points) {
             col_target c1,c2,c3;
-            v2 t=temp_t;
-            
+
+            c1.pt = t;
             c1.angle = get_angle_to_point(p_pos,t);
             intersect_props col = get_collision(p_pos,t,client_sided_render_geometry.segments);
+
             if (!col.collides) {
                 printf("ERROR\n");
                 c1.pt = v2(c1.pt-p_pos).normalize() * 1500.f + p_pos;
@@ -394,8 +400,8 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
             c2.angle = c1.angle + 0.005f;
             c3.angle = c1.angle - 0.005f;
-            c2.pt = (dconvert_angle_to_vec(c2.angle) * 2000.0f) + p_pos;
-            c3.pt = (dconvert_angle_to_vec(c3.angle) * 2000.0f) + p_pos;
+            c2.pt = (dconvert_angle_to_vec(c2.angle) * 1000.0) + p_pos;
+            c3.pt = (dconvert_angle_to_vec(c3.angle) * 1000.0) + p_pos;
             intersect_props col_2 = get_collision(p_pos,c2.pt,client_sided_render_geometry.segments);
             intersect_props col_3 = get_collision(p_pos,c3.pt,client_sided_render_geometry.segments);
             if (col_2.collides) {
@@ -425,17 +431,16 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
             if (fin) n=0;
             v2 pt=dests[n].pt;
             v2 prev_point=n==0?dests.back().pt:dests[n-1].pt;
-            SDL_Vertex vertex_1 = {{(float)p_pos.x,(float)p_pos.y}, white, {1, 1}};
-            SDL_Vertex vertex_2 = {{(float)pt.x,(float)pt.y}, white, {1, 1}};
-            SDL_Vertex vertex_3 = {{(float)prev_point.x,(float)prev_point.y}, white, {1, 1}};
+            SDL_Vertex vertex_1 = {{(float)p_pos.x+cam_mod.x,(float)p_pos.y+cam_mod.y}, white, {1, 1}};
+            SDL_Vertex vertex_2 = {{(float)pt.x+cam_mod.x,(float)pt.y+cam_mod.y}, white, {1, 1}};
+            SDL_Vertex vertex_3 = {{(float)prev_point.x+cam_mod.x,(float)prev_point.y+cam_mod.y}, white, {1, 1}};
             SDL_Vertex vertices[3] = {vertex_1,vertex_2,vertex_3};
             SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
             if (fin) break;
         }        
     
         SDL_SetRenderTarget(sdl_renderer,NULL);
-        SDL_Rect shadow_rect = {cam_mod.x,cam_mod.y,1280,720};
-        SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,&shadow_rect);
+        SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
 
 
         /*
@@ -485,7 +490,7 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
         connection_text.scale = {2,2};
         connection_text.position = {1280/2-connection_text.get_draw_rect().w/2,380};
     }
-            
+    
     SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
     SDL_RenderClear(sdl_renderer);
     SDL_Rect dest = {0,0,1280,720};

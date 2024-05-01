@@ -11,6 +11,8 @@ enum {
     CMD_SHOOT,
     CMD_RELOAD,
 
+    CMD_PLANT,
+
     // special abilities
     CMD_FIREBURST,
     CMD_SHIELD,
@@ -57,6 +59,17 @@ bool operator==(const command_t &left, const command_t &right) {
     return left.props.rot == right.props.rot && left.tick == right.tick && left.code == right.code && left.time == right.time && left.press == right.press && left.sending_id == right.sending_id;
 }
 
+// struct that acts as a non strict combination of commands and actions
+// example: if you press the right key mid animiation and are not yet moving,
+// instead of sending a right key command for others to hear the audio,
+// you'd wait for them to start moving and then send the pseudo action instead
+
+// NOTE: pretty much just for client info like sound and effects, but they're
+// NOT triggered immediately by a command.
+struct pseudo_command{
+    i32 code;
+};
+
 
 static void add_command_to_recent_commands(command_t cmd);
 
@@ -98,18 +111,19 @@ struct character {
     double shield_timer=0.0;
     double animation_timer=0.0;
     double invisibility_timer=0.0;
+    double plant_timer = 0.0;
     double invisibility_cooldown=0.0;
     double shield_cooldown=0.0;
     double fireburst_cooldown=0.0;
 
     enum {
         IDLE,
-        MOVING,
         PUNCHING,
         TAKING_DAMAGE,
         DEAD,
         FIREBURSTING,
         SHIELD,
+        PLANTING,
         CHARACTER_STATE_COUNT
     } curr_state=IDLE;
 
@@ -142,7 +156,7 @@ void player_take_damage(character *player, int dmg) {
 }
 
 int process_command(character *player, command_t cmd) {
-    //if (player->curr_state == character::DEAD) return 0;
+    if (player->curr_state == character::DEAD) return 0;
     
     if (cmd.code == CMD_PUNCH) {
         player->state.timer = 0.25;
@@ -186,34 +200,12 @@ int process_command(character *player, command_t cmd) {
         player->invisibility_timer=2.5;
         player->invisibility_cooldown = invisibility_cooldown_length;
     } else if (cmd.code == CMD_FIREBURST) {
-        // fuck this one actually lol
         return 0;
     } else {
         player->command_state[cmd.code] = cmd.press;
     }
     return 1;
-    //command_callback(player,cmd);
 }
-
-
-// NOTE: this doesn't save the previous state!!! SO if you're holding right,
-// and then somehow a +right gets fired, when reversing it it will always reset
-// to a -right instead of maintaining the previous state of moving right!!!
-
-// can't undo animation like this because we don't know where we were in the
-// animation when the command was called
-/*
-  void unprocess_command(character *player, command_t cmd) {
-  if (cmd.code == CMD_SHOOT) {
-  pop_bullet();
-  } else if (cmd.code == CMD_PUNCH) {
-  player->state.timer = 0;
-  player->curr_state = character::IDLE;
-  } else {
-  player->command_state[cmd.code] = !cmd.press;
-  }
-  }
-*/
 
 void update_player_controller(character *player, int tick, camera_t *game_camera=nullptr) {
     // 16 max commands a tick
@@ -258,6 +250,12 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
         new_commands[cmd_count++] = {CMD_INVISIBLE,true,tick,player->id};
     }
 
+    if (input.just_pressed[SDL_SCANCODE_4]) {
+        new_commands[cmd_count++] = {CMD_PLANT,true,tick,player->id};
+    } else if (input.just_released[SDL_SCANCODE_4]) {
+        new_commands[cmd_count++] = {CMD_PLANT,false,tick,player->id};
+    }
+
     if (input.just_pressed[SDL_SCANCODE_LCTRL]) {
         new_commands[cmd_count++] = {CMD_SHIELD,true,tick,player->id};
     } if (input.just_pressed[SDL_SCANCODE_Q]) {
@@ -269,13 +267,14 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
     }
 }
 
-void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players) {
+// passing tick as a param is dangerous!! ruh roh!!!
+void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players, i32 bombsite_count, v2i *bombsite) {
     if (player->curr_state == character::DEAD) {
         return;
     }
 
     float move_speed = 300;
-    if (player->curr_state != character::TAKING_DAMAGE && player->curr_state != character::SHIELD) {
+    if (player->curr_state != character::TAKING_DAMAGE && player->curr_state != character::SHIELD && player->curr_state != character::PLANTING) {
         if (player->command_state[CMD_LEFT]) {
             player->target_vel.x = -1;
             player->flip = true;
@@ -294,8 +293,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     } else {
         player->target_vel = {0,0};
     }
-
-
+    
     if (player->target_vel.x == 0) {
         player->vel.x *= player->curr_state == character::TAKING_DAMAGE ? 0.85f : 0.75f;
     } else {
@@ -305,14 +303,13 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     } else {
         player->vel.y = player->target_vel.y*move_speed;
     }
-    // so it'll take a quarter of a second to get to maximum speed
-
+    
     if (player->reloading) {
         player->vel *= 0.5f;
     }
-
     
     player->pos.x += player->vel.x * (float)delta;
+    
     FOR(walls,wall_count) {
         fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
         fRect wall_rect = {obj->x*64.f,obj->y*64.f,64.f,64.f};
@@ -338,7 +335,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
             } else {
                 player->pos.y = wall_rect.y + wall_rect.h;
             }
-            break;            
+            break;     
         }
     }
 
@@ -366,6 +363,22 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
                 player->state.timer = 0.5;
                 player->vel.x = (float)(obj->flip ? -1200 : 1200);
                 player_take_damage(player,10);
+                break;
+            }
+        }
+    }
+
+    // if you're idle and walk over a bomb plant area
+    if (player->curr_state == character::IDLE && player->command_state[CMD_PLANT]) {
+        FORn(bombsite,bombsite_count,bs) {
+            fRect b_hitbox = {bs->x*64.f,bs->y*64.f,64.f,64.f};
+            fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+            if (rects_collide(p_hitbox,b_hitbox)) {
+                // this is gonna have some fucked effects lol
+                player->vel = {0,0};
+                player->curr_state = character::PLANTING;
+                player->plant_timer = 3.75;
+                // START PLANTING
                 break;
             }
         }
@@ -401,8 +414,16 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
             player->invisibility_timer = 0;
             player->visible = true;
         }
+    } if (player->curr_state == character::PLANTING) {
+        player->plant_timer -= delta;
+        if (player->plant_timer <= 0) {
+            player->curr_state = character::IDLE;
+            // FINISHED PLANTING
+        }
     }
     player->invisibility_cooldown-=delta;
     player->shield_cooldown-=delta;
     player->fireburst_cooldown-=delta;
 }
+
+

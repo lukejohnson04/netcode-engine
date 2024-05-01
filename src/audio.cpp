@@ -6,6 +6,7 @@ enum SfxType {
     INVISIBILITY_SFX,
     SHIELD_SFX,
     HIT_SFX,
+    PLANT_SFX,
 
     WIN_SFX,
     LOSE_SFX,
@@ -22,6 +23,13 @@ struct singleton_sound_state {
 
 global_variable singleton_sound_state sound_state;
 
+struct sound_event {
+    SfxType type;
+    i32 tick=0;
+};
+
+std::vector<sound_event> sound_queue;
+
 static void init_sfx() {
     sound_effects[SfxType::FLINTLOCK_FIRE_SFX] = Mix_LoadWAV("res/flintlock_fire.mp3");
     sound_effects[SfxType::FLINTLOCK_RELOAD_SFX] = Mix_LoadWAV("res/flintlock_reload.mp3");
@@ -31,6 +39,8 @@ static void init_sfx() {
     sound_effects[SfxType::WIN_SFX] = Mix_LoadWAV("res/win_sfx.mp3");
     sound_effects[SfxType::LOSE_SFX] = Mix_LoadWAV("res/lose_sfx.mp3");
     sound_effects[SfxType::HIT_SFX] = Mix_LoadWAV("res/hit_sfx.mp3");
+    sound_effects[SfxType::PLANT_SFX] = Mix_LoadWAV("res/plant_sfx.mp3");
+
 }
 
 static void fire_forget_sfx(SfxType type) {
@@ -40,4 +50,8 @@ static void fire_forget_sfx(SfxType type) {
             sound_state.pool[ind]=true;
         }
     }
+}
+
+internal void play_sfx(SfxType type) {
+    Mix_PlayChannel( -1, sound_effects[type], 0 );
 }

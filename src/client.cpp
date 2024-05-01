@@ -49,6 +49,17 @@ static void add_command_to_recent_commands(command_t cmd) {
     client_st.NetState.command_buffer.push_back(cmd);
 }
 
+// for client:
+// queue_sound_event(sound)
+
+// for server:
+// queue_sound_event(sound)
+
+// for client:
+// for sound_events on or before tick:
+//    play_sound(sound)
+//    pop(sound)
+
 
 // this a retched solution to the problem lmao
 std::vector<command_t> recently_played_command_sounds;
@@ -56,6 +67,7 @@ std::vector<command_t> recently_played_command_sounds;
 static void command_callback(character *player, command_t cmd) {
     // if you're running this as the server for some reason
     if (client_st.client_id == ID_DONT_EXIST) return;
+    // when sounds play twice its probably because they're verified but off by like a tick
     if (std::find(recently_played_command_sounds.begin(),recently_played_command_sounds.end(),cmd)!=recently_played_command_sounds.end()) {
         return;
     }
@@ -82,9 +94,10 @@ static void command_callback(character *player, command_t cmd) {
             }
             break;
         case CMD_TAKE_DAMAGE:
-            printf("huh\n");
-            Mix_PlayChannel( -1, sound_effects[SfxType::HIT_SFX], 0 );
-            
+            Mix_PlayChannel( -1, sound_effects[SfxType::HIT_SFX], 0 );            
+            break;
+        case CMD_PLANT:
+            Mix_PlayChannel( -1, sound_effects[SfxType::PLANT_SFX], 0 );
             break;
         default:
             return;

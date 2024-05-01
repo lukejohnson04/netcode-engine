@@ -262,15 +262,15 @@ struct intersect_props {
 };
 
 
-double distance_between_points(v2 p1, v2 p2) {
+inline double distance_between_points(v2 p1, v2 p2) {
     return sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
 }
 
-float cross_product(v2i a, v2i b) {
+inline float cross_product(v2i a, v2i b) {
     return (float)(a.x * b.y - a.y * b.x);
 }
 
-intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
+inline intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
     intersect_props result;
     result.collides = false;
 
@@ -352,14 +352,14 @@ struct segment {
     }
 };
 
-intersect_props get_collision(v2i from, v2 to, std::vector<segment> segments) {
+inline intersect_props get_collision(v2i from, v2 to, std::vector<segment> segments) {
     intersect_props res;
     res.collides=false;
 
     double closest = -1;
     
     for (i32 ind=0; ind<segments.size(); ind++) {
-        segment seg = segments[ind];
+        segment &seg = segments[ind];
         intersect_props col = get_intersection(from,to,seg.p1,seg.p2);
         if (col.collides) {
             double dist = distance_between_points(from,col.collision_point);
