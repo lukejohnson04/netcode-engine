@@ -5,6 +5,7 @@ struct server_client_t {
     sockaddr_in addr;
     i64 connection_time;
     int ping;
+    i32 last_processed_command=0;
 };
 
 struct server_t {
@@ -78,6 +79,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             res.data.connection_dump.id = gl_server.client_count;
 
             volatile LARGE_INTEGER t_2 = gl_server.timer.get_high_res_elapsed();
+            printf("Request recieved");
 
             res.data.connection_dump.t_1 = *(LARGE_INTEGER*) &t_1;
             res.data.connection_dump.t_2 = *(LARGE_INTEGER*) &t_2;
@@ -113,6 +115,20 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             send_packet(connect_socket,&clientaddr,&p);
             
         } else if (p.type == COMMAND_DATA) {
+            entity_id id=ID_DONT_EXIST;
+            for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                auto &_client = gl_server.clients[ind];
+                if((_client.sin_addr.s_addr == clientaddr.sin_addr.s_addr) && (_client.sin_port == clientaddr.sin_port)) {
+                    id=ind;
+                    break;
+                }
+            }
+            if (id == ID_DONT_EXIST) {
+                printf("received commands from unknown client\n");
+            } else {
+                printf("Packet from client %d\n",id);
+            }
+            gl_server.s_clients[id].last_processed_command = MAX(gl_server.s_clients[id].last_processed_command,p.data.command_data.end_time);
             if (p.data.command_data.count==0) {
                 continue;
             }
@@ -122,9 +138,8 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                 printf("Received out of date commands!\n");
                 continue;
             }
-
-            // check if we just received some BRAND NEW commands that are too old to use
             
+            // check if we just received some BRAND NEW commands that are too old to use            
             for (i32 n=0;n<p.data.command_data.count;n++) {
                 command_t &cmd = p.data.command_data.commands[n];
                 
@@ -159,12 +174,18 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,first_cmd.tick);
                 if (first_cmd.tick <= last_sent_snapshot_tick) {
                     // go to that snapshot and correct it
-                    for (auto &snap: gl_server.NetState.snapshots) {
-                        if (snap.tick > last_sent_snapshot_tick) continue;
+                    load_game_state_up_to_tick(gs,gl_server.NetState,last_sent_snapshot_tick,true);
+                    packet_t p = {};
+                    p.type = SNAPSHOT_DATA;
+                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                        p.data.snapshot_info.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                    }
+                    
+                    for (i32 ind=0;ind<gl_server.NetState.snapshots.size();ind++) {
+                        game_state &snap=gl_server.NetState.snapshots[ind];
+                        if (snap.tick > last_sent_snapshot_tick) break;
                         if (snap.tick >= first_cmd.tick) {
-                            packet_t p = {};
-                            p.type = SNAPSHOT_DATA;
-                            p.data.snapshot = snap;
+                            p.data.snapshot_info.snapshot = snap;
                             broadcast(&p);
                         }
                     }
@@ -177,7 +198,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
 
 
-static void server() {
+static void server(int port) {
     TCHAR szNewTitle[MAX_PATH];
     StringCchPrintf(szNewTitle, MAX_PATH, TEXT("Server"));
     if( !SetConsoleTitle(szNewTitle) ) {
@@ -206,7 +227,7 @@ static void server() {
     // fill out info
     sockaddr_in servaddr, clientaddr;
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(DEFAULT_PORT);
+    servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     // bind
@@ -215,6 +236,7 @@ static void server() {
         perror("bind failed");
         exit(EXIT_FAILURE);
     }
+    printf("Started server on port %d\n",port);
 
     srand((u32)time(NULL));
 
@@ -267,8 +289,6 @@ static void server() {
 
     bool running=true;
 
-    //r_clock_t tick_clock(gl_server.timer);
-    //r_clock_t snap_clock(gl_server.timer);
     timer_t snap_clock;
     snap_clock.Start();
 
@@ -290,7 +310,7 @@ static void server() {
     // make the snapshot buffer greater if some of the players have very high ping
     // set to 7 over wan
     // can be super low on lan
-    int snapshot_buffer=3;
+    int snapshot_buffer=2;
     int target_tick=0;
     // interp delay on clients should always be below the snapshot buffer on the server
 
@@ -309,7 +329,6 @@ static void server() {
             if (snap_clock.get() > snap_delta) {
                 snap_clock.Restart();
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
-                printf("%d\n",gs.wall_count);
 
                 if (target_tick-snapshot_buffer > 0) {                    
                     gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
@@ -322,8 +341,11 @@ static void server() {
                         packet_t p = {};
                         p.type = SNAPSHOT_DATA;
 
-                        p.data.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
-                        last_sent_snapshot_tick = p.data.snapshot.tick;
+                        p.data.snapshot_info.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
+                        last_sent_snapshot_tick = p.data.snapshot_info.snapshot.tick;
+                        for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                            p.data.snapshot_info.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                        }
 
                         //printf("Sending snapshots for %d\n",p.data.snapshot.tick);
                         broadcast(&p);
@@ -331,19 +353,17 @@ static void server() {
                         // send important command data
                         p = {};
                         p.type = COMMAND_CALLBACK_INFO;
-                        p.data.command_callback_info.count = (i32)gl_server.NetState.command_callback_info.size();
-                        for(i32 ind=0;ind<gl_server.NetState.command_callback_info.size();ind++){
-                            auto pr = gl_server.NetState.command_callback_info[ind];
-                            if (pr.second.tick<(target_tick-snapshot_buffer)-30) {
-                                gl_server.NetState.command_callback_info.erase(gl_server.NetState.command_callback_info.begin()+ind);
+                        p.data.command_callback_info.count = 0;
+                        for(i32 ind=0;ind<(i32)sound_queue.size();ind++){
+                            sound_event event = sound_queue[ind];
+                            if (event.tick<(target_tick-snapshot_buffer)-60) {
+                                sound_queue.erase(sound_queue.begin()+ind);
                                 ind--;
                                 continue;
                             }
-                            p.data.command_callback_info.ids[ind]=pr.first;
-                            p.data.command_callback_info.commands[ind]=pr.second;
+                            p.data.command_callback_info.sounds[p.data.command_callback_info.count++] = event;
                         }
                         broadcast(&p);
-
                     }
                 }
                 new_frame_ready=true;

@@ -22,7 +22,7 @@
 #include <algorithm>
 #include <iostream>
 
-#define DEFAULT_PORT 13172
+#define DEFAULT_PORT 51516
 #define DEFAULT_IP "127.0.0.1"
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
@@ -91,7 +91,7 @@ static void GameGUIStart() {
     SDL_Renderer* sdl_renderer;
 
     // SDL_RENDERER_PRESENTVSYNC | 
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
     if (sdl_renderer == nullptr) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         return;
@@ -158,21 +158,36 @@ static void GameGUIStart() {
             player = &gs.players[client_st.client_id];
         }
 
-        if (client_st.gms.state == GMS::ROUND_PLAYING) {
+        if (client_st.gms.state == GMS::ROUND_PLAYING || 1) {
             i32 prev_wall_count=gs.wall_count;
             update_player_controller(player,target_tick,&game_camera);
             if (client_snapshot_buffer_stack.size() > 0) {
-                for (auto &snap:client_snapshot_buffer_stack) {
-                    client_st.NetState.snapshots.push_back(snap);
-                }
+                client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_snapshot_buffer_stack.begin(),client_snapshot_buffer_stack.end());
                 std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
                 client_snapshot_buffer_stack.clear();
             }
             if (load_new_snapshot) {
-                gs = new_snapshot;
-                load_new_snapshot=false;
-                //printf("Loaded snapshot\n");
+                if (new_snapshot.tick <= client_st.last_command_processed_by_server) {
+                
+                    gs = new_snapshot;
+                    load_new_snapshot=false;
+                    //printf("Loaded snapshot\n");
+                }
             }
+
+            
+            // load a snapshot from 100ms ago
+            /*
+            if (client_st.NetState.snapshots.size() > 0) {
+                for (auto snap=client_st.NetState.snapshots.end()-1; snap>=client_st.NetState.snapshots.begin(); snap--) {
+                    if (snap->tick <= client_st.last_command_processed_by_server) {
+                        gs = *snap;
+                        break;
+                    }
+                }
+            }
+            */
+            
             
             bool update_health_display=false;
             int p_health_before_update = player ? player->health : 0;
@@ -244,22 +259,22 @@ static void GameGUIStart() {
                         }
                     }
                 }
-                
-                // process all command callbacks
-                for (i32 ind=0; ind<client_st.NetState.command_callback_info.size(); ind++) {
-                    auto p=client_st.NetState.command_callback_info[ind];
-                    if (p.second.tick <= interp_tick) {
-                        if (p.second.tick>=old_interp_tick) {
-                            // need a robust way to check if a sound has been processed or not already
-                            // on the client side
-                            if (p.first != player->id || p.second.code == CMD_DIE) {
-                                command_callback(&gs.players[p.first],p.second);
-                            }
-                        }
-                        // its probably processing the command, deleting it, and then recieving a new
-                        // one from the server (because the server buffers a couple ticks of the callbacks)
-                        client_st.NetState.command_callback_info.erase(client_st.NetState.command_callback_info.begin()+ind);
-                        ind--;
+
+                for (auto event=sound_queue.begin(); event<sound_queue.end(); event++) {
+                    // delete old
+                    if (event->tick < target_tick - 120) {
+                        event = sound_queue.erase(event);
+                        event--;
+                    }
+                    // dont play a command twice
+                    if (event->played) continue;
+                    i32 t = event->tick;
+                    if (event->id != client_st.client_id) {
+                        t -= client_st.NetState.interp_delay;
+                    }
+                    if (t < target_tick) {
+                        play_sfx(event->type);
+                        event->played=true;
                     }
                 }
             }
@@ -302,7 +317,7 @@ static void GameGUIStart() {
                 }
                 printf("Points before: %d\n",(i32)rps.size());
                 std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
-                  return *(double*)&left < *(double*)&right;
+                    return *(double*)&left < *(double*)&right;
                 });
                 std::unordered_map<double,int> p_set;
                 for (auto &p:rps) p_set[*(double*)&p]++;
@@ -373,8 +388,9 @@ static void GameGUIStart() {
 
             if (player) {
                 game_camera.follow = player;
-                game_camera.pos = game_camera.follow->pos;
+                //game_camera.pos = game_camera.follow->pos;
             }
+            game_camera.pos = {1280/2,720/2};
             render_game_state(sdl_renderer,player,&game_camera);
             // gui
             SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
@@ -435,6 +451,78 @@ static void GameGUIStart() {
                     gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
                 }
                 SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&gui_elements.magazine_cnt_text.get_draw_rect());
+            }
+
+            // visualize net data
+            local_persist bool visualize_netgraph=true;
+            if (input.just_pressed[SDL_SCANCODE_GRAVE]) {
+                visualize_netgraph = !visualize_netgraph;
+            }
+            if (visualize_netgraph) {
+                i32 end_tick = target_tick + 10;
+                i32 interp_tick = target_tick-client_st.NetState.interp_delay;
+                i32 begin_tick = end_tick-60;
+                SDL_Rect graph_box_rect = {16,16,880,100};
+                int padding=20;
+                SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
+                SDL_RenderFillRect(sdl_renderer,&graph_box_rect);
+                SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+
+                int timeline_p1x = graph_box_rect.x;
+                int timeline_p1y = graph_box_rect.y + graph_box_rect.h/2;
+                int timeline_p2x = graph_box_rect.x + graph_box_rect.w;
+                int timeline_p2y = timeline_p1y;
+
+                // 3 times to get thickness
+                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y-1,timeline_p2x,timeline_p2y-1);
+                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y,timeline_p2x,timeline_p2y);
+                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y+1,timeline_p2x,timeline_p2y+1);
+
+                SDL_SetRenderDrawColor(sdl_renderer,120,120,120,255);
+                for (i32 ind=begin_tick;ind<end_tick;ind++) {
+                    const int stride = (graph_box_rect.w-padding) / 60;
+                    i32 xpos = (ind-begin_tick) * stride + padding/2;
+                    v2i p1 = {graph_box_rect.x + xpos,timeline_p1y-3};
+                    v2i p2 = {graph_box_rect.x + xpos,timeline_p1y+3};
+                    if (ind == target_tick) {
+                        p1.y -= 16;
+                        p2.y += 16;
+                        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+                    } else if (ind == interp_tick) {
+                        p1.y -= 8;
+                        p2.y += 8;                        
+                        SDL_SetRenderDrawColor(sdl_renderer,0,0,255,255);
+                    } else {
+                        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                    }
+                    i32 count=0;
+                    for (auto &snap:client_st.NetState.snapshots) {
+                        if (snap.tick==ind) {
+                            count++;
+                            break;
+                        }
+                    }
+                    if (count) {
+                        SDL_SetRenderDrawColor(sdl_renderer,100,100,100+(count/5),255);
+                        SDL_Rect r = {p1.x-(stride/2),timeline_p1y-8,stride,16};
+                        // draw a rectangle
+                        SDL_RenderFillRect(sdl_renderer,&r);
+                        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                        SDL_RenderDrawRect(sdl_renderer,&r);
+                    }
+                    SDL_RenderDrawLine(sdl_renderer,p1.x,p1.y,p2.x,p2.y);
+                    SDL_RenderDrawLine(sdl_renderer,p1.x+1,p1.y,p2.x+1,p2.y);
+                }
+
+                /*
+
+                v2i target_tick_p1 = {16 + graph_box_rect.w - 8,timeline_p1y - 16};
+                v2i target_tick_p2 = {16 + graph_box_rect.w - 8,timeline_p1y + 16};
+                SDL_RenderDrawLine(sdl_renderer,target_tick_p1.x,target_tick_p1.y,target_tick_p2.x,target_tick_p2.y);
+                SDL_RenderDrawLine(sdl_renderer,target_tick_p1.x+1,target_tick_p1.y,target_tick_p2.x+1,target_tick_p2.y);
+
+                v2i interp_tick_p1 = {
+                */
             }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
@@ -689,17 +777,18 @@ int main(int argc, char *argv[]) {
         printf("Failed to startup winsock. Error code: %d", WSAGetLastError());
         return -1;
     }
-
     
     if (argc > 1 && !strcmp(argv[1], "client")) {
         int port = DEFAULT_PORT;
         std::string ip_addr=DEFAULT_IP;
-        if (argc < 2) {
+        /*if (argc < 2) {
             fprintf(stderr, "not enough args!");
             return -1;
-        } if (argc == 3) {
+        }
+        */
+        if (argc >= 3) {
             sscanf_s(argv[2], "%d", &port);
-        } if (argc == 4) {
+        } if (argc >= 4) {
             ip_addr = std::string(argv[3]);
         }
         client_connect(port,ip_addr);
@@ -707,7 +796,11 @@ int main(int argc, char *argv[]) {
         // demo
         demo();
     } else {
-        server();
+        int port = DEFAULT_PORT;
+        if (argc > 1) {
+            sscanf_s(argv[1],"%d",&port);
+        }
+        server(port);
     }
     return 0;
 }

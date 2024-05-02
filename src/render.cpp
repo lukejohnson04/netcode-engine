@@ -4,6 +4,7 @@ enum TexType {
     BULLET_TEXTURE,
 
     // gui
+    ITEM_TEXTURE,
     PREGAME_TEXTURE,
     STARTGAME_BUTTON_TEXTURE,
     ABILITIES_TEXTURE,
@@ -27,6 +28,8 @@ static void init_textures(SDL_Renderer *renderer) {
     textures[TexType::LEVEL_TEXTURE] = IMG_LoadTexture(renderer,"res/levels.png");
     textures[TexType::ABILITIES_TEXTURE] = IMG_LoadTexture(renderer,"res/abilities.png");
     textures[TexType::UI_TEXTURE] = IMG_LoadTexture(renderer,"res/ui.png");
+
+    textures[TexType::ITEM_TEXTURE] = IMG_LoadTexture(renderer,"res/items.png");
     
     textures[TexType::RAYCAST_DOT_TEXTURE] = IMG_LoadTexture(renderer,"res/dot.png");
 

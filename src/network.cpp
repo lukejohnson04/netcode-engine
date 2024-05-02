@@ -31,16 +31,6 @@ enum PACKET_TYPE {
     END_ROUND
 };
 
-struct snapshot_t {
-    game_state state;
-    double time;
-};
-
-
-static void load_snapshot(snapshot_t s) {
-    gs = s.state;
-}
-
 // just assume all packets are 1KB for now lol
 struct packet_t {
     u8 type;
@@ -61,8 +51,8 @@ struct packet_t {
         } full_info_dump;
         
         struct {
-            double start_time;
-            double end_time;
+            i32 start_time;
+            i32 end_time;
             int count;
             command_t commands[256];
         } command_data;
@@ -90,12 +80,15 @@ struct packet_t {
         
         overall_game_manager gms;
         
-        game_state snapshot;
+        struct {
+            game_state snapshot;
+            // fill for each client
+            i32 last_processed_command_tick[8];
+        } snapshot_info;
 
         struct {
             i32 count;
-            entity_id ids[16];
-            command_t commands[16];
+            sound_event sounds[128];
         } command_callback_info;
 
         struct {
@@ -156,27 +149,3 @@ struct timer_t {
         QueryPerformanceCounter(&start_time);
     }
 };
-
-
-
-// clock_t records time relative to a global clock;
-/*struct r_clock_t {
-
-    r_clock_t(timer_t &t) : m_timer(t) {
-        start_time = m_timer.get();
-    }    
-
-    double getElapsedTime() {
-        return m_timer.get() - start_time;
-    }
-
-    void Restart() {
-        start_time = m_timer.get();
-    }
-
-    double start_time;
-    
-private:
-    timer_t &m_timer;
-};
-*/

@@ -8,3 +8,15 @@ TODO:
 convert game_start_time to a LARGE_INTEGER, fix rubber banding and weird delays
 
 timer is 100% synced tho! at least!!!
+
+TODO:
+
+Figure out automatic segment generation for walls when the level is initally loaded
+There's 100% chance someone has done this before and writing about it on the internet... so, yeah.
+
+Then take the unique points from all segments. This way we can much faster iterate over all segments and all points.
+
+Iterate through all points, append the angle to it along with +0.00001 and -0.00001 radians. Sort by clockwise
+Iterate through all angles. Detect collision point.
+
+THEN we can either iterate through all collision points to draw triangles, OR draw triangles inline with the collision detection. This would make it O(n) instead of O(2n).

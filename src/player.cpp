@@ -66,9 +66,6 @@ bool operator==(const command_t &left, const command_t &right) {
 
 // NOTE: pretty much just for client info like sound and effects, but they're
 // NOT triggered immediately by a command.
-struct pseudo_command{
-    i32 code;
-};
 
 
 static void add_command_to_recent_commands(command_t cmd);
@@ -147,8 +144,7 @@ character create_player(v2 pos,u32 nid) {
 }
 
 static void add_bullet(v2 pos, float rot, entity_id shooter_id);
-static void command_callback(character *player, command_t cmd);
-static void no_bullets_fire_effects();
+//static void command_callback(character *player, command_t cmd);
 
 void player_take_damage(character *player, int dmg) {
     player->health -= dmg;
@@ -164,6 +160,7 @@ int process_command(character *player, command_t cmd) {
     } else if (cmd.code == CMD_SHOOT) {
         add_bullet(player->pos+v2(16,16), cmd.props.rot, player->id);
         player->bullets_in_mag--;
+        queue_sound(SfxType::FLINTLOCK_FIRE_SFX,player->id,cmd.tick);
     } else if (cmd.code == CMD_DIE) {
         player->curr_state = character::DEAD;
     } else if (cmd.code == CMD_FIREBURST) {
@@ -177,6 +174,7 @@ int process_command(character *player, command_t cmd) {
         player->curr_state = character::SHIELD;
         player->shield_timer = 1.0;
         player->shield_cooldown = shield_cooldown_length;
+        queue_sound(SfxType::SHIELD_SFX,player->id,cmd.tick);
     } else if (cmd.code == CMD_TAKE_DAMAGE) {
         player_take_damage(player,cmd.props.damage);
         player->curr_state = character::TAKING_DAMAGE;
@@ -189,6 +187,7 @@ int process_command(character *player, command_t cmd) {
         } else if (player->bullets_in_mag != 5 && player->reloading == false) {
             player->reloading = true;
             player->reload_timer=2.0;
+            queue_sound(SfxType::FLINTLOCK_RELOAD_SFX,player->id,cmd.tick);
         }
     } else if (cmd.code == CMD_INVISIBLE) {
         if (player->invisibility_cooldown > 0) {
@@ -199,10 +198,16 @@ int process_command(character *player, command_t cmd) {
         player->visible = false;
         player->invisibility_timer=2.5;
         player->invisibility_cooldown = invisibility_cooldown_length;
+        queue_sound(SfxType::INVISIBILITY_SFX,player->id,cmd.tick);
     } else if (cmd.code == CMD_FIREBURST) {
         return 0;
     } else {
         player->command_state[cmd.code] = cmd.press;
+        if (cmd.code == CMD_PLANT) {
+            if (cmd.press == false) {
+                player->curr_state = character::IDLE;
+            }
+        }
     }
     return 1;
 }
@@ -230,7 +235,7 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
         new_commands[cmd_count++] = {CMD_DOWN,false,tick,player->id};
     } if (input.just_pressed[SDL_SCANCODE_SPACE]) {
         if (player->bullets_in_mag==0) {
-            no_bullets_fire_effects();
+            queue_sound(SfxType::FLINTLOCK_NO_AMMO_FIRE_SFX,player->id,tick);
             // make clicking sound effect
         } else {
             v2i mPos = get_mouse_position();
@@ -267,8 +272,11 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
     }
 }
 
+internal void on_bomb_plant_finished(entity_id id, i32 tick);
+
+
 // passing tick as a param is dangerous!! ruh roh!!!
-void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players, i32 bombsite_count, v2i *bombsite) {
+void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players, i32 bombsite_count, v2i *bombsite, i32 tick, bool bomb_planted) {
     if (player->curr_state == character::DEAD) {
         return;
     }
@@ -369,7 +377,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     }
 
     // if you're idle and walk over a bomb plant area
-    if (player->curr_state == character::IDLE && player->command_state[CMD_PLANT]) {
+    if (!bomb_planted && player->curr_state == character::IDLE && player->command_state[CMD_PLANT]) {
         FORn(bombsite,bombsite_count,bs) {
             fRect b_hitbox = {bs->x*64.f,bs->y*64.f,64.f,64.f};
             fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
@@ -378,6 +386,8 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
                 player->vel = {0,0};
                 player->curr_state = character::PLANTING;
                 player->plant_timer = 3.75;
+
+                queue_sound(SfxType::PLANT_SFX,player->id,tick);
                 // START PLANTING
                 break;
             }
@@ -419,6 +429,8 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         if (player->plant_timer <= 0) {
             player->curr_state = character::IDLE;
             // FINISHED PLANTING
+            // this should likely be authoritative
+            on_bomb_plant_finished(player->id,tick);
         }
     }
     player->invisibility_cooldown-=delta;

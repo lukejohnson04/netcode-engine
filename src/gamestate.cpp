@@ -12,13 +12,17 @@ struct game_state {
     i32 bullet_count=0;
     bullet_t bullets[128];
 
+    i32 bombsite_count=0;
+    v2i bombsite[64];
+
     // should abstract these net variables out eventually
     i32 score[8] = {0};
     double time=0;
     int tick=0;
 
-    i32 bombsite_count=0;
-    v2i bombsite[64];
+    int bomb_planted_tick=0;
+    entity_id bomb_planter = ID_DONT_EXIST;
+    v2i bomb_plant_location={0,0};
 
     int round_start_tick=0;
     int one_remaining_tick=0;
@@ -57,9 +61,7 @@ struct netstate_info_t {
     std::vector<command_t> command_buffer;
 
     std::vector<game_state> snapshots;
-    std::vector<std::pair<entity_id,command_t>> command_callback_info;
-    std::vector<pseudo_command> pseudo_commands;
-
+    
     bool authoritative=false;
     int interp_delay=0;
 
@@ -102,10 +104,6 @@ static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
     bullet.shooter_id = shooter_id;
 }
 
-internal void queue_sound(SfxType type, i32 tick) {
-    sound_queue.push_back({type,tick});
-}
-
 
 static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
     for (i32 ind=(i32)c.snapshots.size()-1;ind>=0;ind--) {
@@ -121,12 +119,71 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
 
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = ROUND_PLAYING;
+    i32 rand_level = rand() % 4;    
+    SDL_Surface *level_surface = IMG_Load("res/levels.png");
+
+    gs.bullet_count=0;
+    gs.wall_count=0;
+    gs.one_remaining_tick=0;
+
+
+    i32 spawn_count=0;
+    v2i spawns[8]={{0,0}};
+    
+    for (i32 x=0; x<20; x++) {
+        for (i32 y=0; y<12; y++) {
+            Color col = {0,0,0,0};
+            Uint32 data = getpixel(level_surface, x+(20*rand_level),y);
+            SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
+            if (col == Color(0,0,0,255)) {
+                add_wall({x,y});
+            } else if (col == Color(255,0,0,255)) {
+                spawns[spawn_count++] = {x,y};
+            }
+        }
+    }
+
+    bool create_all_charas = gs.player_count == gms.connected_players ? false : true;
+    gs.player_count=0;
+
+    for (i32 ind=0; ind<gms.connected_players; ind++) {
+        if (create_all_charas == false) {
+            character old_chara = gs.players[ind];
+            
+            add_player();
+            gs.players[ind] = create_player({0,0},old_chara.id);
+            gs.players[ind].color = old_chara.color;
+        } else {
+            add_player();
+        
+            int total_color_points=rand() % 255 + (255+200);
+            gs.players[gs.player_count-1].color.r = rand()%MIN(255,total_color_points);
+            total_color_points-=gs.players[gs.player_count-1].color.r;
+            gs.players[gs.player_count-1].color.g = rand()%MIN(255,total_color_points);
+            total_color_points-=gs.players[gs.player_count-1].color.g;
+            gs.players[gs.player_count-1].color.b = total_color_points;
+        }
+        i32 rand_spawn = rand() % spawn_count;
+        gs.players[ind].pos = spawns[rand_spawn]*64;
+        spawns[rand_spawn] = spawns[spawn_count-1];
+        spawn_count--;
+    }
+
+    SDL_FreeSurface(level_surface);
+
+    // start in 5 seconds
+    gs.round_start_tick = gs.tick + 300;
+}
+/*
+void load_gamestate_for_round(overall_game_manager &gms) {
+    gms.state = ROUND_PLAYING;
     SDL_Surface *level_surface = IMG_Load("res/map.png");
 
     gs.bullet_count=0;
     gs.wall_count=0;
     gs.one_remaining_tick=0;
     gs.bombsite_count=0;
+    gs.bomb_planted_tick=0;
 
     i32 spawn_count=0;
     v2i spawns[8]={{0,0}};
@@ -177,9 +234,14 @@ void load_gamestate_for_round(overall_game_manager &gms) {
     // start in 5 seconds
     gs.round_start_tick = gs.tick + 300;
 }
+*/
+internal void on_bomb_plant_finished(entity_id id, i32 tick) {
+    gs.bomb_planted_tick = tick;
+    gs.bomb_planter = id;
+    gs.bomb_plant_location = gs.players[id].pos;
+}
 
-
-//#define GAME_CAN_END
+#define GAME_CAN_END
 void game_state::update(netstate_info_t &c, double delta) {
     if (tick < round_start_tick) {
         return;
@@ -199,28 +261,13 @@ void game_state::update(netstate_info_t &c, double delta) {
     // process commands for this tick
     for (command_t &cmd: c.command_stack) {
         if (cmd.tick == tick) {
-            if (process_command(&players[cmd.sending_id],cmd)) {
-                if (cmd.code == CMD_PLANT) continue;
-                if (c.authoritative) {
-                    // need a pseudo command
-                    c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
-                } else {
-                    command_callback(&players[cmd.sending_id],cmd);
-                }
-            }
+            process_command(&players[cmd.sending_id],cmd);
         }
     }
     
     for (command_t &cmd: c.command_buffer) {
         if (cmd.tick == tick) {
-            if (process_command(&players[cmd.sending_id],cmd)) {
-                if (cmd.code == CMD_PLANT) continue;
-                if (c.authoritative) {
-                    c.command_callback_info.push_back(std::make_pair(cmd.sending_id,cmd));
-                } else {
-                    command_callback(&players[cmd.sending_id],cmd);
-                }
-            }
+            process_command(&players[cmd.sending_id],cmd);
         }
     }
 
@@ -241,7 +288,6 @@ void game_state::update(netstate_info_t &c, double delta) {
             if (living_player_count==1) {
                 one_remaining_tick=tick;
                 score[last_alive->id]++;
-                printf("Player became last alive on tick %d\n",tick);
             }
         } else if (tick >= gs.one_remaining_tick) {
             if (tick >= gs.one_remaining_tick+90+180) {
@@ -264,11 +310,12 @@ void game_state::update(netstate_info_t &c, double delta) {
     }
 #endif
 
+    i32 planted_before_tick = (bomb_planted_tick != 0);
     // interp delay in ticks
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
         bool planting_before_update = obj->curr_state == character::PLANTING;
-        update_player(obj,delta,wall_count,walls,player_count,players,bombsite_count,bombsite);
+        update_player(obj,delta,wall_count,walls,player_count,players,bombsite_count,bombsite,tick,planted_before_tick);
     }
 
     FOR(bullets,bullet_count) {
@@ -301,6 +348,12 @@ void game_state::update(netstate_info_t &c, double delta) {
             continue;
         }
     }
+
+    if (!planted_before_tick && bomb_planted_tick) {
+        if (c.authoritative) {
+            queue_sound(SfxType::PLANT_FINISHED_SFX,bomb_planter,bomb_planted_tick);
+        }
+    }
 }
 
 v2 pp;
@@ -330,7 +383,7 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
     SDL_RenderClear(sdl_renderer);
 
     v2i cam_mod = {0,0};
-    if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
+    //if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
 
     for (i32 ind=0; ind<gs.wall_count; ind++) {
         SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
@@ -368,13 +421,21 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         float rad_rot = convert_vec_to_angle(gs.bullets[ind].vel)+PI;
         SDL_RenderCopyEx(sdl_renderer,textures[BULLET_TEXTURE],NULL,&rect,rad_2_deg(rad_rot),&center,SDL_FLIP_NONE);
     }
+
+    // if the bomb has been planted draw the bomb
+    if (gs.bomb_planted_tick != 0) {
+        SDL_Rect rect = {16,16,16,16};
+        SDL_Rect dest = {(int)gs.bomb_plant_location.x-12+cam_mod.x,(int)gs.bomb_plant_location.y-12+cam_mod.y,24,24};
+        SDL_RenderCopy(sdl_renderer,textures[TexType::ITEM_TEXTURE],&rect,&dest);
+    }
+    
     if (render_from_perspective_of != nullptr && client_sided_render_geometry.raycast_points.size()>0) {
         const SDL_Color black = {0,0,0,255};
         const SDL_Color white = {255,255,255,255};
 
         SDL_SetRenderTarget(sdl_renderer,textures[SHADOW_TEXTURE]);
         SDL_RenderClear(sdl_renderer);
-        SDL_SetRenderDrawColor(sdl_renderer,50,50,50,255);
+        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
         SDL_RenderFillRect(sdl_renderer,NULL);
         
         v2i p_pos = render_from_perspective_of->pos + v2(32,32);
@@ -400,8 +461,9 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
             c2.angle = c1.angle + 0.005f;
             c3.angle = c1.angle - 0.005f;
-            c2.pt = (dconvert_angle_to_vec(c2.angle) * 1000.0) + p_pos;
-            c3.pt = (dconvert_angle_to_vec(c3.angle) * 1000.0) + p_pos;
+            // NOTE: the length needs to be AT LEAST the screen width!
+            c2.pt = (dconvert_angle_to_vec(c2.angle) * 2000.0) + p_pos;
+            c3.pt = (dconvert_angle_to_vec(c3.angle) * 2000.0) + p_pos;
             intersect_props col_2 = get_collision(p_pos,c2.pt,client_sided_render_geometry.segments);
             intersect_props col_3 = get_collision(p_pos,c3.pt,client_sided_render_geometry.segments);
             if (col_2.collides) {
@@ -423,22 +485,19 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
             return left.angle < right.angle;
         });
         
-
-
-        //SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_ADD);
         for (i32 n=0;n<dests.size()+1;n++) {
             bool fin=n==dests.size();
             if (fin) n=0;
             v2 pt=dests[n].pt;
             v2 prev_point=n==0?dests.back().pt:dests[n-1].pt;
-            SDL_Vertex vertex_1 = {{(float)p_pos.x+cam_mod.x,(float)p_pos.y+cam_mod.y}, white, {1, 1}};
-            SDL_Vertex vertex_2 = {{(float)pt.x+cam_mod.x,(float)pt.y+cam_mod.y}, white, {1, 1}};
-            SDL_Vertex vertex_3 = {{(float)prev_point.x+cam_mod.x,(float)prev_point.y+cam_mod.y}, white, {1, 1}};
+            SDL_Vertex vertex_1 = {{(float)p_pos.x,(float)p_pos.y}, white, {1, 1}};
+            SDL_Vertex vertex_2 = {{(float)pt.x,(float)pt.y}, white, {1, 1}};
+            SDL_Vertex vertex_3 = {{(float)prev_point.x,(float)prev_point.y}, white, {1, 1}};
             SDL_Vertex vertices[3] = {vertex_1,vertex_2,vertex_3};
             SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
             if (fin) break;
-        }        
-    
+        }
+        
         SDL_SetRenderTarget(sdl_renderer,NULL);
         SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
 

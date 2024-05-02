@@ -8,6 +8,8 @@ enum SfxType {
     HIT_SFX,
     PLANT_SFX,
 
+    PLANT_FINISHED_SFX,
+
     WIN_SFX,
     LOSE_SFX,
     
@@ -25,7 +27,9 @@ global_variable singleton_sound_state sound_state;
 
 struct sound_event {
     SfxType type;
+    i32 id=ID_DONT_EXIST;
     i32 tick=0;
+    bool played=false;
 };
 
 std::vector<sound_event> sound_queue;
@@ -40,6 +44,7 @@ static void init_sfx() {
     sound_effects[SfxType::LOSE_SFX] = Mix_LoadWAV("res/lose_sfx.mp3");
     sound_effects[SfxType::HIT_SFX] = Mix_LoadWAV("res/hit_sfx.mp3");
     sound_effects[SfxType::PLANT_SFX] = Mix_LoadWAV("res/plant_sfx.mp3");
+    sound_effects[SfxType::PLANT_FINISHED_SFX] = Mix_LoadWAV("res/plant_finished_sfx.mp3");
 
 }
 
@@ -54,4 +59,19 @@ static void fire_forget_sfx(SfxType type) {
 
 internal void play_sfx(SfxType type) {
     Mix_PlayChannel( -1, sound_effects[type], 0 );
+}
+
+internal void queue_sound(SfxType type, i32 id, i32 tick) {
+    sound_event s = {type,id,tick};
+    for (auto &event:sound_queue) {
+        if (event.type == type && event.tick == tick && event.id == id) {
+            return;
+        }
+    }
+    sound_queue.push_back(s);
+}
+
+
+internal void queue_sound(sound_event s) {
+    queue_sound(s.type,s.id,s.tick);
 }

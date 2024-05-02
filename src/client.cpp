@@ -6,6 +6,7 @@ struct client_t {
     sockaddr_in servaddr;
 
     double ping=0;
+    i32 last_command_processed_by_server=0;
 
     // sync_clock getElapsedTime returns the exact time since the SERVER started
     timer_t sync_timer;
@@ -62,8 +63,9 @@ static void add_command_to_recent_commands(command_t cmd) {
 
 
 // this a retched solution to the problem lmao
-std::vector<command_t> recently_played_command_sounds;
+//std::vector<command_t> recently_played_command_sounds;
 
+/*
 static void command_callback(character *player, command_t cmd) {
     // if you're running this as the server for some reason
     if (client_st.client_id == ID_DONT_EXIST) return;
@@ -108,6 +110,7 @@ static void command_callback(character *player, command_t cmd) {
 static void no_bullets_fire_effects() {
     Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_NO_AMMO_FIRE_SFX], 0 );
 }
+*/
 
 
 int last_tick_processed_in_client_loop=0;
@@ -142,89 +145,64 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 
         } else if (pc.type == GS_FULL_INFO) {
             printf("changing from %d players to %d players\n", gs.player_count, pc.data.full_info_dump.p_count);
-            gs = pc.data.snapshot;
+            gs = pc.data.snapshot_info.snapshot;
             client_st.gms.connected_players=gs.player_count;
                         
         } else if (pc.type == SNAPSHOT_DATA) {
             // mutex this
-            if (load_new_snapshot && new_snapshot.tick == pc.data.snapshot.tick) {
-                new_snapshot = pc.data.snapshot;
+            if (load_new_snapshot && new_snapshot.tick == pc.data.snapshot_info.snapshot.tick) {
+                new_snapshot = pc.data.snapshot_info.snapshot;
                 continue;
             }
             bool found=false;
             for (i32 ind=0; ind<client_snapshot_buffer_stack.size(); ind++) {
-                if (client_snapshot_buffer_stack[ind].tick==pc.data.snapshot.tick) {
-                    client_snapshot_buffer_stack[ind] = pc.data.snapshot;
+                if (client_snapshot_buffer_stack[ind].tick==pc.data.snapshot_info.snapshot.tick) {
+                    client_snapshot_buffer_stack[ind] = pc.data.snapshot_info.snapshot;
                     found=true;
                     break;
                 }
             }
             if (found) continue;
             for (i32 ind=0; ind<client_st.NetState.snapshots.size(); ind++) {
-                if (client_st.NetState.snapshots[ind].tick==pc.data.snapshot.tick) {
-                    client_st.NetState.snapshots[ind] = pc.data.snapshot;
+                if (client_st.NetState.snapshots[ind].tick==pc.data.snapshot_info.snapshot.tick) {
+                    client_st.NetState.snapshots[ind] = pc.data.snapshot_info.snapshot;
                     found=true;
                     break;
                 }
             }
-            if (found) continue;            
-            
-            client_snapshot_buffer_stack.push_back(pc.data.snapshot);
+            if (found) continue;
+
+            client_st.last_command_processed_by_server = MAX(client_st.last_command_processed_by_server,pc.data.snapshot_info.last_processed_command_tick[client_st.client_id]);
+            client_snapshot_buffer_stack.push_back(pc.data.snapshot_info.snapshot);
 
             //std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
             int server_tick = client_st.get_exact_current_server_tick();
             
-            if (pc.data.snapshot.tick <= last_tick_processed_in_client_loop) {
+            if (pc.data.snapshot_info.snapshot.tick <= last_tick_processed_in_client_loop) {
                 // should we also check if the snapshot is greater than the current gs tick?
                 // because that way if we receive two snapshots between client ticks we would
                 // load the second snapshot
                 //gs = pc.data.snapshot;
                 load_new_snapshot=true;
-                new_snapshot = pc.data.snapshot;
+                new_snapshot = pc.data.snapshot_info.snapshot;
 
                 // dont do this update loop because we could skip past the immediate next tick that
                 // we otherwise would have updated on in the main update loop
             } else {
-                printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot.tick,gs.tick,server_tick);
+                printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot_info.snapshot.tick,gs.tick,server_tick);
             }
             
         } else if (pc.type == COMMAND_CALLBACK_INFO) {
             for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
-                auto dupe = std::make_pair(pc.data.command_callback_info.ids[ind],pc.data.command_callback_info.commands[ind]);
-                if (find(client_st.NetState.command_callback_info.begin(),client_st.NetState.command_callback_info.end(),dupe)==client_st.NetState.command_callback_info.end()) {
-                    client_st.NetState.command_callback_info.push_back(dupe);
-                }
+                queue_sound(pc.data.command_callback_info.sounds[ind]);
             }
 
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {
             client_st.gms.game_start_time = pc.data.game_start_time;
             client_st.gms.counting_down_to_game_start=true;
 
-        } else if (pc.type == COMMAND_DATA) {
-            continue;
-            std::vector<command_t> new_commands;
-            for (i32 ind=0; ind<pc.data.command_data.count; ind++) {
-                command_t &cmd=pc.data.command_data.commands[ind];
-                // remove duplicates
-                if (find(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),cmd) == client_st.NetState.command_stack.end()) {
-                    new_commands.push_back(cmd);
-                    if (cmd.sending_id != client_st.client_id) {
-                        printf("New command: %d %c%d\n",cmd.sending_id,cmd.press?'+':'-',cmd.code);
-                    }
-                }
-            }
-
-            if (new_commands.size() != 0) {
-                std::sort(new_commands.begin(),new_commands.end(),command_sort_by_time());
-                if (new_commands[0].time < gs.time) {
-                    rewind_game_state(gs,client_st.NetState,new_commands[0].time);
-                }
-                // merge
-                client_st.NetState.command_stack.insert(client_st.NetState.command_stack.end(),new_commands.begin(),new_commands.end());
-                std::sort(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),command_sort_by_time());
-            }
-
         } else {
+            // this gets called when it times out each time from no packet recieved
             printf("wtf\n");
         }
     }
@@ -251,6 +229,16 @@ static void client_connect(int port,std::string ip_addr) {
     servaddr.sin_port = htons((short) port);
     servaddr.sin_addr.s_addr = inet_addr(ip_addr.c_str());
 
+
+    /*
+    struct timeval send_tv,rec_tv;
+    send_tv.tv_sec = 20000;
+    rec_tv.tv_sec = 20000;
+    setsockopt(connect_socket,SOL_SOCKET,SO_SNDTIMEO,(char*)&send_tv,sizeof(send_tv));
+    setsockopt(connect_socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&rec_tv,sizeof(rec_tv));
+    */
+    printf("Attempting connection on port %d to ip %s\n",port,ip_addr.c_str());
+
     // connection request
     packet_t p = {};
     p.type = CONNECTION_REQUEST;
@@ -266,6 +254,7 @@ static void client_connect(int port,std::string ip_addr) {
     
     p = {};
     ret = recieve_packet(connect_socket,&servaddr,&p);
+    printf("received packet\n");
 
     volatile LARGE_INTEGER t_3=client_st.sync_timer.get_high_res_elapsed();
 
@@ -326,9 +315,10 @@ static void client_send_input(int curr_tick) {
     // really we should be sending the last second or so of commands
     // to combat packet loss, but we won't worry about that for now
     // because it gives us a massive headache removing duplicates
-    if (client_st.NetState.command_buffer.empty()) {
+    /*if (client_st.NetState.command_buffer.empty()) {
         return;
     }
+    */
     packet_t p = {};
     p.type = COMMAND_DATA;
     p.data.command_data = {};
