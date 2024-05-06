@@ -6,18 +6,19 @@ struct game_state {
     i32 player_count=0;
     character players[8];
 
+    i32 bullet_count=0;
+    bullet_t bullets[64];
+
+    // this is map data, not game state data!
+    // and can be removed completely
     i32 wall_count=0;
     v2i walls[512];
-
-    i32 bullet_count=0;
-    bullet_t bullets[128];
 
     i32 bombsite_count=0;
     v2i bombsite[64];
 
     // should abstract these net variables out eventually
     i32 score[8] = {0};
-    double time=0;
     int tick=0;
 
     int bomb_planted_tick=0;
@@ -28,8 +29,13 @@ struct game_state {
     int one_remaining_tick=0;
 
     void update(netstate_info_t &c, double delta);
-    //void update_player(character *player, double delta, netstate_info_t &c);
 };
+
+struct snapshot_t {
+    game_state gms;
+    i32 last_processed_command_tick[16];
+};
+
 
 enum GMS {
     GAME_HASNT_STARTED,
@@ -54,33 +60,21 @@ struct overall_game_manager {
 };
 
 
+struct command_node {
+    command_t cmd;
+    bool verified;
+};
+
 // bridge between gamestate and network
 struct netstate_info_t {
     // fuck it
-    std::vector<command_t> command_stack;
-    std::vector<command_t> command_buffer;
-
-    std::vector<game_state> snapshots;
+    std::vector<command_node> command_stack;    
+    std::vector<snapshot_t> snapshots;
     
     bool authoritative=false;
     int interp_delay=0;
 
     overall_game_manager gms;
-
-    void add_snapshot(game_state gs, bool authoritative=false, int curr_tick=0, int snapshot_buffer=0) {
-        if (authoritative) {
-            for (game_state &snap: snapshots) {
-                if (snap.tick == gs.tick) {
-                    if (gs.tick < curr_tick-snapshot_buffer) {
-                        printf("WARNING: Overwriting snapshot at tick %d",gs.tick);
-                    }
-                    snap = gs;
-                    return;
-                }
-            }
-        }
-        snapshots.push_back(gs);
-    }
 
     bool do_charas_interp[16]={true};
 };
@@ -105,7 +99,7 @@ static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
 }
 
 
-static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
+/*static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
     for (i32 ind=(i32)c.snapshots.size()-1;ind>=0;ind--) {
         if (c.snapshots[ind].time<=target_time) {
             gst = c.snapshots[ind];
@@ -115,7 +109,7 @@ static void rewind_game_state(game_state &gst, netstate_info_t &c, double target
     }
     printf("ERROR: Cannot rewind game state!\n");
 }
-
+*/
 
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = ROUND_PLAYING;
@@ -253,23 +247,19 @@ void game_state::update(netstate_info_t &c, double delta) {
         FORn(players,player_count,player) {
             if (player->health <= 0 && player->curr_state != character::DEAD) {
                 command_t kill_command = {CMD_DIE,false,gs.tick,player->id};
-                c.command_stack.push_back(kill_command);
+                command_node node = {kill_command,true};
+                c.command_stack.push_back(node);
             }
         }
     }
     
     // process commands for this tick
-    for (command_t &cmd: c.command_stack) {
-        if (cmd.tick == tick) {
-            process_command(&players[cmd.sending_id],cmd);
+    for (command_node &node: c.command_stack) {
+        if (node.cmd.tick == tick) {
+            process_command(&players[node.cmd.sending_id],node.cmd);
         }
     }
     
-    for (command_t &cmd: c.command_buffer) {
-        if (cmd.tick == tick) {
-            process_command(&players[cmd.sending_id],cmd);
-        }
-    }
 
 #ifdef GAME_CAN_END
     if (c.authoritative) {
@@ -355,6 +345,7 @@ void game_state::update(netstate_info_t &c, double delta) {
         }
     }
 }
+
 
 v2 pp;
 int collision_point_sort(const void *v1, const void*v2) {
@@ -572,8 +563,8 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
 // loads the first snapshot found before the input time
 void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int start_tick) {
     for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
-        if (c.snapshots[ind].tick<=start_tick) {
-            gst = c.snapshots[ind];
+        if (c.snapshots[ind].gms.tick<=start_tick) {
+            gst = c.snapshots[ind].gms;
             return;
         }
     }
@@ -585,10 +576,11 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
         // should this be before or after???
         // after i think because this function shouldn't have to worry about previous ticks
         // crazy inefficient lol
+        // TODO: fix this
         if (overwrite_snapshots) {
-            for (game_state &snap: c.snapshots) {
-                if (snap.tick==gs.tick) {
-                    snap = gs;
+            for (snapshot_t &snap: c.snapshots) {
+                if (snap.gms.tick==gs.tick) {
+                    snap.gms = gs;
                     break;
                 }
             }

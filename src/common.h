@@ -23,9 +23,9 @@ typedef double real64;
 typedef real32 f32; // float
 typedef real64 d64; // double
 
-typedef u32 entity_id;
+typedef u16 entity_id;
 
-#define ID_DONT_EXIST 99999999
+#define ID_DONT_EXIST 65500
 #define ID_SERVER 566
 
 #define For(count) for(i32 ind=0;ind<count;ind++)

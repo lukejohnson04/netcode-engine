@@ -1,28 +1,17 @@
 
-
 struct client_t {
     u32 client_id=ID_DONT_EXIST;
     int socket;
     sockaddr_in servaddr;
 
     double ping=0;
-    i32 last_command_processed_by_server=0;
+    int last_tick_processed=0;
 
-    // sync_clock getElapsedTime returns the exact time since the SERVER started
     timer_t sync_timer;
-    //r_clock_t sync_clock;
-    //int last_tick;
-    
     netstate_info_t NetState;
-    std::vector<command_t> command_history;
+    std::vector<snapshot_t> merge_snapshots;
 
     overall_game_manager &gms=NetState.gms;
-
-    /*
-      struct {
-        entity_id player_id=ID_DONT_EXIST;
-    } game_data;
-    */
 
     bool init_ok=false;
     // delay
@@ -41,82 +30,20 @@ struct client_t {
         next_tick_time.QuadPart = gms.game_start_time.QuadPart + (next_tick*sync_timer.frequency.QuadPart/60);
         return static_cast<double>(next_tick_time.QuadPart-sync_timer.get_high_res_elapsed().QuadPart)/sync_timer.frequency.QuadPart;
     }
+
+    // mutex
+    HANDLE _mt_merge_snapshots;
+    bool _new_merge_snapshot=false;
 };
 
 
 global_variable client_t client_st={};
 
-static void add_command_to_recent_commands(command_t cmd) {
-    client_st.NetState.command_buffer.push_back(cmd);
+internal void add_command_to_recent_commands(command_t cmd) {
+    command_node node = {cmd,false};
+    client_st.NetState.command_stack.push_back(node);
 }
 
-// for client:
-// queue_sound_event(sound)
-
-// for server:
-// queue_sound_event(sound)
-
-// for client:
-// for sound_events on or before tick:
-//    play_sound(sound)
-//    pop(sound)
-
-
-// this a retched solution to the problem lmao
-//std::vector<command_t> recently_played_command_sounds;
-
-/*
-static void command_callback(character *player, command_t cmd) {
-    // if you're running this as the server for some reason
-    if (client_st.client_id == ID_DONT_EXIST) return;
-    // when sounds play twice its probably because they're verified but off by like a tick
-    if (std::find(recently_played_command_sounds.begin(),recently_played_command_sounds.end(),cmd)!=recently_played_command_sounds.end()) {
-        return;
-    }
-    switch (cmd.code) {
-        case CMD_SHOOT:
-            Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_FIRE_SFX], 0 );
-            break;
-        case CMD_RELOAD:
-            Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_RELOAD_SFX], 0 );
-            break;
-        case CMD_INVISIBLE:
-            Mix_PlayChannel( -1, sound_effects[SfxType::INVISIBILITY_SFX], 0 );
-            break;
-        case CMD_SHIELD:
-            Mix_PlayChannel( -1, sound_effects[SfxType::SHIELD_SFX], 0 );
-            break;
-        case CMD_DIE:
-            if (player->id == client_st.client_id) {
-                Mix_PlayChannel( -1, sound_effects[SfxType::LOSE_SFX], 0 );
-                printf("Processed lose callback for die command\n");
-            } else {
-                Mix_PlayChannel( -1, sound_effects[SfxType::WIN_SFX], 0 );
-                printf("Processed win callback for die command\n");
-            }
-            break;
-        case CMD_TAKE_DAMAGE:
-            Mix_PlayChannel( -1, sound_effects[SfxType::HIT_SFX], 0 );            
-            break;
-        case CMD_PLANT:
-            Mix_PlayChannel( -1, sound_effects[SfxType::PLANT_SFX], 0 );
-            break;
-        default:
-            return;
-    }
-    recently_played_command_sounds.push_back(cmd);
-}
-
-static void no_bullets_fire_effects() {
-    Mix_PlayChannel( -1, sound_effects[SfxType::FLINTLOCK_NO_AMMO_FIRE_SFX], 0 );
-}
-*/
-
-
-int last_tick_processed_in_client_loop=0;
-game_state new_snapshot;
-bool load_new_snapshot=false;
-std::vector<game_state> client_snapshot_buffer_stack;
 
 DWORD WINAPI ClientListen(LPVOID lpParamater) {
     const int connect_socket = *(int*)lpParamater;
@@ -128,69 +55,23 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         packet_t pc = {};
         int ret = recieve_packet(connect_socket,&servaddr,&pc);
 
-        if (pc.type == MESSAGE) {
-            printf("%s\n", pc.data.msg);
-
-        } else if (pc.type == NEW_CLIENT_CONNECTED) {
-            client_st.gms.connected_players++;
-
-        } else if (pc.type == ADD_PLAYER) {
-            gs.players[gs.player_count++] = pc.data.new_player;
+        if (pc.type == NEW_CLIENT_CONNECTED) {
             client_st.gms.connected_players++;
 
         } else if (pc.type == INFO_DUMP_ON_CONNECTED) {
             client_st.gms.connected_players=pc.data.info_dump_on_connected.client_count;
             client_st.client_id = client_st.gms.connected_players-1;
             printf("%d\n",client_st.gms.connected_players);
-
-        } else if (pc.type == GS_FULL_INFO) {
-            printf("changing from %d players to %d players\n", gs.player_count, pc.data.full_info_dump.p_count);
-            gs = pc.data.snapshot_info.snapshot;
-            client_st.gms.connected_players=gs.player_count;
                         
-        } else if (pc.type == SNAPSHOT_DATA) {
-            // mutex this
-            if (load_new_snapshot && new_snapshot.tick == pc.data.snapshot_info.snapshot.tick) {
-                new_snapshot = pc.data.snapshot_info.snapshot;
-                continue;
-            }
-            bool found=false;
-            for (i32 ind=0; ind<client_snapshot_buffer_stack.size(); ind++) {
-                if (client_snapshot_buffer_stack[ind].tick==pc.data.snapshot_info.snapshot.tick) {
-                    client_snapshot_buffer_stack[ind] = pc.data.snapshot_info.snapshot;
-                    found=true;
-                    break;
-                }
-            }
-            if (found) continue;
-            for (i32 ind=0; ind<client_st.NetState.snapshots.size(); ind++) {
-                if (client_st.NetState.snapshots[ind].tick==pc.data.snapshot_info.snapshot.tick) {
-                    client_st.NetState.snapshots[ind] = pc.data.snapshot_info.snapshot;
-                    found=true;
-                    break;
-                }
-            }
-            if (found) continue;
+        } else if (pc.type == SNAPSHOT_TRANSIENT_DATA) {
+            WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
+            printf("Recieved snapshot\n");
 
-            client_st.last_command_processed_by_server = MAX(client_st.last_command_processed_by_server,pc.data.snapshot_info.last_processed_command_tick[client_st.client_id]);
-            client_snapshot_buffer_stack.push_back(pc.data.snapshot_info.snapshot);
+            client_st.merge_snapshots.push_back(pc.data.snapshot);
+            client_st._new_merge_snapshot = true;
 
-            //std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
-            int server_tick = client_st.get_exact_current_server_tick();
-            
-            if (pc.data.snapshot_info.snapshot.tick <= last_tick_processed_in_client_loop) {
-                // should we also check if the snapshot is greater than the current gs tick?
-                // because that way if we receive two snapshots between client ticks we would
-                // load the second snapshot
-                //gs = pc.data.snapshot;
-                load_new_snapshot=true;
-                new_snapshot = pc.data.snapshot_info.snapshot;
-
-                // dont do this update loop because we could skip past the immediate next tick that
-                // we otherwise would have updated on in the main update loop
-            } else {
-                printf("Received snap %d at gs tick %d on server tick %d\n",pc.data.snapshot_info.snapshot.tick,gs.tick,server_tick);
-            }
+            ReleaseMutex(client_st._mt_merge_snapshots);
+        } else if (pc.type == SNAPSHOT_PERSIST_DATA) {
             
         } else if (pc.type == COMMAND_CALLBACK_INFO) {
             for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
@@ -304,7 +185,8 @@ static void client_connect(int port,std::string ip_addr) {
 
     client_st.servaddr = servaddr;
     client_st.socket = connect_socket;
-    
+
+    client_st._mt_merge_snapshots = CreateMutex(NULL,FALSE,NULL);
 
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ClientListen, (LPVOID)&connect_socket, 0, &ThreadID);
@@ -315,48 +197,35 @@ static void client_send_input(int curr_tick) {
     // really we should be sending the last second or so of commands
     // to combat packet loss, but we won't worry about that for now
     // because it gives us a massive headache removing duplicates
-    /*if (client_st.NetState.command_buffer.empty()) {
-        return;
-    }
-    */
     packet_t p = {};
     p.type = COMMAND_DATA;
     p.data.command_data = {};
+
+    i32 start_tick = curr_tick - 30;
+    i32 end_tick = curr_tick;
+    p.data.command_data.count=0;
     
-    p.data.command_data.count = 0;
-
-    // right now its possible to send inputs from the current tick, but then add more inputs on the next
-    // client tick. Then, you update it during the client tick with the extra input. This could be the
-    // cause of rubber banding
-
-    // send last x ticks worth of commands
-    p.data.command_data.start_time = curr_tick-20;
-    p.data.command_data.end_time = curr_tick;
-
-    client_st.command_history.insert(client_st.command_history.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());
-    i32 first_elem_in_range=0;
-    for (i32 ind=0; ind<client_st.command_history.size(); ind++) {
-        if (client_st.command_history[ind].tick >= p.data.command_data.start_time) {
-            p.data.command_data.commands[p.data.command_data.count++] = client_st.command_history[ind];
-        } else {
-            first_elem_in_range++;
+    for (auto &node=client_st.NetState.command_stack.begin();node<client_st.NetState.command_stack.end();node++) {
+        if (node->cmd.tick < start_tick) {
+            if (node->cmd.tick < end_tick - 120) {
+                node = client_st.NetState.command_stack.erase(node);
+                node--;
+                continue;
+            }
+        }
+        
+        if (node->cmd.tick > end_tick) {
+            continue;
+        }
+        if (node->verified==false) {
+            p.data.command_data.commands[p.data.command_data.count++] = node->cmd;
         }
     }
-    
-    if (first_elem_in_range >= client_st.command_history.size()) {
-        client_st.command_history.clear();
-    }
-    
-    for (i32 ind=0; ind<client_st.command_history.size(); ind++) {
-        command_t cmd = client_st.command_history[ind];
-        // reverse the interpolation delay on the command
-        p.data.command_data.commands[p.data.command_data.count++] = cmd;
-    }
 
-    client_st.NetState.command_stack.insert(client_st.NetState.command_stack.end(),client_st.NetState.command_buffer.begin(),client_st.NetState.command_buffer.end());
-    std::sort(client_st.NetState.command_stack.begin(),client_st.NetState.command_stack.end(),command_sort_by_time());
-
-    client_st.NetState.command_buffer.clear();
+    p.data.command_data.start_tick = start_tick;
+    p.data.command_data.end_tick = end_tick;
+    
+    assert(p.data.command_data.count <= 64);
     
     send_packet(client_st.socket,&client_st.servaddr,&p);
 }

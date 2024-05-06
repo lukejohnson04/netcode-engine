@@ -1,4 +1,5 @@
 
+
 #define MAX_CLIENTS 256
 
 struct server_client_t {
@@ -22,7 +23,7 @@ struct server_t {
     server_header_t header;
     timer_t timer;
 
-    std::vector<int> dropped_command_times;
+    std::vector<command_t> merge_commands;
 
     overall_game_manager &gms=NetState.gms;
 
@@ -33,6 +34,11 @@ struct server_t {
         int ticks_elapsed = (int)floor(elapsed / (1.0/60.0));
         return ticks_elapsed;
     }
+
+    // mutex info
+    HANDLE _mt_merge_commands;
+    // buffer so we don't need a second mutex
+    i32 last_proc_command_buffer[MAX_CLIENTS]={0};
 };
 
 global_variable server_t gl_server;
@@ -65,9 +71,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             return 0;
         }
 
-        if (p.type == MESSAGE) {
-            printf("%s\n",p.data.msg);
-        } else if (p.type == CONNECTION_REQUEST) {
+        if (p.type == CONNECTION_REQUEST) {
             volatile LARGE_INTEGER t_1=gl_server.timer.get_high_res_elapsed();
             
             in_addr client_ip_addr;
@@ -110,87 +114,32 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             }
 
         } else if (p.type == PING) {
-            packet_t p = {};
-            p.type = PING;
-            send_packet(connect_socket,&clientaddr,&p);
+            packet_t res = {};
+            res.type = PING;
+            send_packet(connect_socket,&clientaddr,&res);
             
         } else if (p.type == COMMAND_DATA) {
-            entity_id id=ID_DONT_EXIST;
+            WaitForSingleObject(gl_server._mt_merge_commands,INFINITE);
+            entity_id client_id = ID_DONT_EXIST;
             for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                auto &_client = gl_server.clients[ind];
-                if((_client.sin_addr.s_addr == clientaddr.sin_addr.s_addr) && (_client.sin_port == clientaddr.sin_port)) {
-                    id=ind;
+                sockaddr_in _cl_to_comp = gl_server.clients[ind];
+                
+                if ((_cl_to_comp.sin_addr.s_addr == clientaddr.sin_addr.s_addr) && (_cl_to_comp.sin_port == clientaddr.sin_port)) {
+                    client_id = ind;
                     break;
                 }
             }
-            if (id == ID_DONT_EXIST) {
-                printf("received commands from unknown client\n");
-            } else {
-                printf("Packet from client %d\n",id);
+            assert(client_id != ID_DONT_EXIST);
+    
+            // ought to mutex this :/
+            // merge commands
+            for (i32 ind=0; ind<p.data.command_data.count; ind++) {
+                command_t cmd = p.data.command_data.commands[ind];
+                gl_server.merge_commands.push_back(cmd);
             }
-            gl_server.s_clients[id].last_processed_command = MAX(gl_server.s_clients[id].last_processed_command,p.data.command_data.end_time);
-            if (p.data.command_data.count==0) {
-                continue;
-            }
-
-            // disregard any command more than 20 ticks old
-            if (p.data.command_data.end_time < gl_server.last_tick - 20) {
-                printf("Received out of date commands!\n");
-                continue;
-            }
+            gl_server.last_proc_command_buffer[client_id] = MAX(gl_server.last_proc_command_buffer[client_id],MAX(gl_server.s_clients[client_id].last_processed_command,p.data.command_data.end_tick));
             
-            // check if we just received some BRAND NEW commands that are too old to use            
-            for (i32 n=0;n<p.data.command_data.count;n++) {
-                command_t &cmd = p.data.command_data.commands[n];
-                
-                if (std::find(gl_server.NetState.command_stack.begin(),gl_server.NetState.command_stack.end(),cmd)==gl_server.NetState.command_stack.end()) {
-                    if (std::find(gl_server.NetState.command_buffer.begin(),gl_server.NetState.command_buffer.end(),cmd)==gl_server.NetState.command_buffer.end()) {
-                        gl_server.NetState.command_buffer.push_back(cmd);
-                    }
-                }
-            }
-            
-            std::vector<command_t> &buf=gl_server.NetState.command_buffer;
-            
-            // rewind to first command there and update up
-            if (buf.size() > 1) {
-                std::sort(buf.begin(),buf.end(),command_sort_by_time());
-            }
-            command_t first_cmd = gl_server.NetState.command_buffer[0];
-            if (first_cmd.sending_id == ID_DONT_EXIST) {
-                printf("FUCK\n");
-                // bad news this just got ran!!!!
-            }
-            gl_server.NetState.command_stack.insert(gl_server.NetState.command_stack.end(),buf.begin(),buf.end());
-            std::sort(gl_server.NetState.command_stack.begin(),gl_server.NetState.command_stack.end(),command_sort_by_time());
-            gl_server.NetState.command_buffer.clear();
-
-            // dont rewind state it doesnt run
-            // update to past (present - 2 seconds for example) and it runs fine but out of sync
-            if (first_cmd.tick <= last_sent_snapshot_tick) {
-                //printf("Error: received command for tick %d but snapshot %d has been sent!\n",first_cmd.tick,last_sent_snapshot_tick);
-                gl_server.dropped_command_times.push_back(gs.tick);
-            } if (first_cmd.tick < gs.tick) {
-                find_and_load_gamestate_snapshot(gs,gl_server.NetState,first_cmd.tick);
-                if (first_cmd.tick <= last_sent_snapshot_tick) {
-                    // go to that snapshot and correct it
-                    load_game_state_up_to_tick(gs,gl_server.NetState,last_sent_snapshot_tick,true);
-                    packet_t p = {};
-                    p.type = SNAPSHOT_DATA;
-                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                        p.data.snapshot_info.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
-                    }
-                    
-                    for (i32 ind=0;ind<gl_server.NetState.snapshots.size();ind++) {
-                        game_state &snap=gl_server.NetState.snapshots[ind];
-                        if (snap.tick > last_sent_snapshot_tick) break;
-                        if (snap.tick >= first_cmd.tick) {
-                            p.data.snapshot_info.snapshot = snap;
-                            broadcast(&p);
-                        }
-                    }
-                }
-            }
+            ReleaseMutex(gl_server._mt_merge_commands);
         }
     }
     return 0;
@@ -247,6 +196,8 @@ static void server(int port) {
         gl_server.NetState.do_charas_interp[ind]=false;
     }
 
+
+    gl_server._mt_merge_commands = CreateMutex(NULL,FALSE,NULL);
 
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
@@ -328,27 +279,61 @@ static void server(int port) {
 
             if (snap_clock.get() > snap_delta) {
                 snap_clock.Restart();
+                // merge command mutex
+                DWORD do_merge_commands = WaitForSingleObject(gl_server._mt_merge_commands,0);
+                if (do_merge_commands == WAIT_OBJECT_0) {
+                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                        gl_server.s_clients[ind].last_processed_command = gl_server.last_proc_command_buffer[ind];
+                    }
+                    if (gl_server.merge_commands.size()==0) {
+                        goto command_merge_finish;
+                    }
+                    // merge newly received commands, but don't overwrite duplicates
+                    i32 earliest_new_cmd_tick=-1;
+                    for (auto new_cmd=gl_server.merge_commands.begin();new_cmd<gl_server.merge_commands.end();new_cmd++) {
+                        // if the command is already in the stack discard it
+                        bool cont=false;
+                        for (i32 ind=0; ind<gl_server.NetState.command_stack.size(); ind++) {
+                            command_node old_command = gl_server.NetState.command_stack[ind];
+                            if (old_command.cmd == *new_cmd) {
+                                cont = true;
+                                break;
+                            }
+                        }
+                        if (cont) continue;
+                        command_node node = {*new_cmd,true};
+                        gl_server.NetState.command_stack.push_back(node);
+                        if (earliest_new_cmd_tick == -1) {
+                            earliest_new_cmd_tick = new_cmd->tick;
+                        } else {
+                            earliest_new_cmd_tick = MIN(new_cmd->tick,earliest_new_cmd_tick);
+                        }
+                    }
+                    gl_server.merge_commands.clear();
+                    
+            command_merge_finish:
+                    ReleaseMutex(gl_server._mt_merge_commands);
+                }
+                
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
 
-                if (target_tick-snapshot_buffer > 0) {                    
-                    gl_server.NetState.add_snapshot(gs,true,target_tick,snapshot_buffer);
+                if (target_tick-snapshot_buffer > 0) {
+                    // NOTE: add snapshot
+                    packet_t p = {};
+                    p.type = SNAPSHOT_TRANSIENT_DATA;
+                    p.data.snapshot.gms = gs;
+                    // last processed command data
+                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                        p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                    }
 
+                    broadcast(&p);
+                    
                     // send the last 6 ticks worth of snapshots
                     // that way the server doesn't need to buffer any snapshots, and the client just overwrites
                     // the latest snapshots they have with the one from the server
 
                     if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
-                        packet_t p = {};
-                        p.type = SNAPSHOT_DATA;
-
-                        p.data.snapshot_info.snapshot = gl_server.NetState.snapshots[gl_server.NetState.snapshots.size()-1];
-                        last_sent_snapshot_tick = p.data.snapshot_info.snapshot.tick;
-                        for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                            p.data.snapshot_info.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
-                        }
-
-                        //printf("Sending snapshots for %d\n",p.data.snapshot.tick);
-                        broadcast(&p);
 
                         // send important command data
                         p = {};

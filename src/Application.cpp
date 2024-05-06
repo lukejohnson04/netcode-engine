@@ -10,6 +10,7 @@
 #include <tchar.h>
 #include <conio.h>
 #include <strsafe.h>
+#include <assert.h>
 
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
@@ -149,6 +150,9 @@ static void GameGUIStart() {
 
     camera_t game_camera;
 
+    // WAY too big its like 8kb lol
+    printf("gamestate size: %d\n",(i32)sizeof(game_state));
+
     
     while (running) {
         // input
@@ -158,42 +162,58 @@ static void GameGUIStart() {
             player = &gs.players[client_st.client_id];
         }
 
-        if (client_st.gms.state == GMS::ROUND_PLAYING || 1) {
+        if (client_st.gms.state == GMS::ROUND_PLAYING) {
             i32 prev_wall_count=gs.wall_count;
             update_player_controller(player,target_tick,&game_camera);
-            if (client_snapshot_buffer_stack.size() > 0) {
-                client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_snapshot_buffer_stack.begin(),client_snapshot_buffer_stack.end());
-                std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](game_state &left, game_state &right) {return left.tick < right.tick;});
-                client_snapshot_buffer_stack.clear();
-            }
-            if (load_new_snapshot) {
-                if (new_snapshot.tick <= client_st.last_command_processed_by_server) {
-                
-                    gs = new_snapshot;
-                    load_new_snapshot=false;
-                    //printf("Loaded snapshot\n");
-                }
-            }
-
             
-            // load a snapshot from 100ms ago
-            /*
-            if (client_st.NetState.snapshots.size() > 0) {
-                for (auto snap=client_st.NetState.snapshots.end()-1; snap>=client_st.NetState.snapshots.begin(); snap--) {
-                    if (snap->tick <= client_st.last_command_processed_by_server) {
-                        gs = *snap;
-                        break;
-                    }
-                }
-            }
-            */
-            
-            
+            // load a snapshot from 100ms ago            
             bool update_health_display=false;
             int p_health_before_update = player ? player->health : 0;
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
+
+            // TODO: make it so the server sends clients snapshots based on the last recieved input
+            // e.g. if the server is at time 100 and last client command recieved was at 95, send
+            // snapshot for 95 instead of sending each client just the snapshot for 100
+            
+            // snapshots
+            DWORD _merge_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
+            if (_merge_wait == WAIT_OBJECT_0) {
+                if (client_st._new_merge_snapshot) {
+                    client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_st.merge_snapshots.begin(),client_st.merge_snapshots.end());
+                    client_st.merge_snapshots.clear();
+                    client_st._new_merge_snapshot=false;
+                } else {
+                    goto snapshot_merge_finish;
+                }
+                auto &snapshots = client_st.NetState.snapshots;
+                // load the last snapshot we had an input processed on
+                std::sort(snapshots.begin(),snapshots.end(),[](auto&left,auto&right) {
+                    return left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
+                });
+                
+                i32 last_tick_processed = snapshots.back().last_processed_command_tick[client_st.client_id];
+                // find the snapshot before the target tick with the most recently processed client commands
+                for (auto &snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
+                    if (snap->gms.tick <= last_tick_processed) {
+                        gs = snap->gms;
+                        break;
+                    }
+                }
+                
+        snapshot_merge_finish:
+                for (auto &snap=snapshots.begin();snap<snapshots.end();snap++) {
+                    if (snap->gms.tick < target_tick - 180) {
+                        snap = snapshots.erase(snap);
+                        snap--;
+                    } else {
+                        break;
+                    }
+                }
+                ReleaseMutex(client_st._mt_merge_snapshots);
+            }
+            
             while(gs.tick<target_tick) {
                 gs.update(client_st.NetState,tick_delta);
                 gs.tick++;
@@ -216,8 +236,8 @@ static void GameGUIStart() {
                 game_state *next_snap=nullptr;
                 game_state *exac_snap=nullptr;
 
-                if (client_st.NetState.snapshots.back().tick < interp_tick) {
-                    printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,client_st.NetState.snapshots.back().tick);
+                if (client_st.NetState.snapshots.back().gms.tick < interp_tick) {
+                    printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,client_st.NetState.snapshots.back().gms.tick);
                 }
                 // actually, this whole process of lerping is a little pointless when we have 60 snapshots a second
                 // cause we don't actually lerp at all unless there's packet loss... we just set it to one snapshot
@@ -225,7 +245,7 @@ static void GameGUIStart() {
 
                 // this whole process of finding interp snapshots only needs to be done once for all players btw
                 for (i32 ind=(i32)client_st.NetState.snapshots.size()-1;ind>=0;ind--){
-                    game_state &snap = client_st.NetState.snapshots[ind];
+                    game_state &snap = client_st.NetState.snapshots[ind].gms;
                 
                     if (snap.tick == interp_tick) {
                         exac_snap=&snap;
@@ -278,7 +298,7 @@ static void GameGUIStart() {
                     }
                 }
             }
-            last_tick_processed_in_client_loop=target_tick;
+            client_st.last_tick_processed=target_tick;
             
             if (player) {
                 if (player->health != p_health_before_update) {
@@ -386,6 +406,8 @@ static void GameGUIStart() {
                 printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
 
+            
+
             if (player) {
                 game_camera.follow = player;
                 //game_camera.pos = game_camera.follow->pos;
@@ -462,6 +484,14 @@ static void GameGUIStart() {
                 i32 end_tick = target_tick + 10;
                 i32 interp_tick = target_tick-client_st.NetState.interp_delay;
                 i32 begin_tick = end_tick-60;
+
+                i32 last_proc_tick=0;
+                for (auto &snap:client_st.NetState.snapshots) {
+                    if (snap.last_processed_command_tick[client_st.client_id] > last_proc_tick) {
+                        last_proc_tick = snap.last_processed_command_tick[client_st.client_id];
+                    }
+                }
+
                 SDL_Rect graph_box_rect = {16,16,880,100};
                 int padding=20;
                 SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
@@ -490,20 +520,25 @@ static void GameGUIStart() {
                         SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
                     } else if (ind == interp_tick) {
                         p1.y -= 8;
-                        p2.y += 8;                        
+                        p2.y += 8;
                         SDL_SetRenderDrawColor(sdl_renderer,0,0,255,255);
                     } else {
                         SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
                     }
                     i32 count=0;
+                    i32 most_recently_proc=0;
                     for (auto &snap:client_st.NetState.snapshots) {
-                        if (snap.tick==ind) {
+                        if (snap.gms.tick==ind) {
+                            most_recently_proc = MAX(most_recently_proc,snap.last_processed_command_tick[client_st.client_id]);
                             count++;
-                            break;
                         }
                     }
                     if (count) {
-                        SDL_SetRenderDrawColor(sdl_renderer,100,100,100+(count/5),255);
+                        if (last_proc_tick > ind) {
+                            SDL_SetRenderDrawColor(sdl_renderer,0,255,0,255);
+                        } else {
+                            SDL_SetRenderDrawColor(sdl_renderer,100,100,100+(count/5),255);
+                        }
                         SDL_Rect r = {p1.x-(stride/2),timeline_p1y-8,stride,16};
                         // draw a rectangle
                         SDL_RenderFillRect(sdl_renderer,&r);
@@ -513,6 +548,27 @@ static void GameGUIStart() {
                     SDL_RenderDrawLine(sdl_renderer,p1.x,p1.y,p2.x,p2.y);
                     SDL_RenderDrawLine(sdl_renderer,p1.x+1,p1.y,p2.x+1,p2.y);
                 }
+
+                std::string curr_tick_str = "Tick: " + std::to_string(target_tick);
+                std::string last_input_processed_by_server_str = "Last processed input: " + std::to_string(last_proc_tick);
+                generic_drawable curr_tick = generate_text(sdl_renderer,m5x7,curr_tick_str, {0,255,0,255});
+                curr_tick.position = {graph_box_rect.x, graph_box_rect.y + graph_box_rect.h+4};
+                curr_tick.scale = {2,2};
+
+                SDL_Color col;
+                if (last_proc_tick > target_tick) {
+                    col = {0,255,0,255};
+                } else {
+                    col = {255,0,0,255};
+                }
+                generic_drawable last_proc = generate_text(sdl_renderer,m5x7,last_input_processed_by_server_str, col);
+                last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_rect().h + 4);
+                last_proc.scale = {2,2};
+                
+                SDL_RenderCopy(sdl_renderer,curr_tick.texture,NULL,(SDL_Rect*)&curr_tick.get_draw_rect());
+                SDL_RenderCopy(sdl_renderer,last_proc.texture,NULL,(SDL_Rect*)&last_proc.get_draw_rect());
+                
+                
 
                 /*
 

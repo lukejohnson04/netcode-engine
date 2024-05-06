@@ -20,7 +20,8 @@ enum PACKET_TYPE {
     GS_FULL_INFO,
     GAME_DATA,
     COMMAND_DATA,
-    SNAPSHOT_DATA,
+    SNAPSHOT_TRANSIENT_DATA,
+    SNAPSHOT_PERSIST_DATA,
     INFO_DUMP_ON_CONNECTED,
 
     COMMAND_CALLBACK_INFO,
@@ -31,30 +32,19 @@ enum PACKET_TYPE {
     END_ROUND
 };
 
+
 // just assume all packets are 1KB for now lol
 struct packet_t {
     u8 type;
     u16 size;
 
     union {
-        char msg[1024];
-        time_t time;
-        struct {i32 x, y;} vec;
-        entity_id id;
-        u32 count;
-
-        character new_player;
-
-        struct {
-            u32 p_count;
-            character players[8];
-        } full_info_dump;
         
         struct {
-            i32 start_time;
-            i32 end_time;
-            int count;
-            command_t commands[256];
+            i32 start_tick;
+            i32 end_tick;
+            i32 count;
+            command_t commands[64];
         } command_data;
 
         struct {
@@ -79,24 +69,14 @@ struct packet_t {
         LARGE_INTEGER game_start_time;
         
         overall_game_manager gms;
-        
-        struct {
-            game_state snapshot;
-            // fill for each client
-            i32 last_processed_command_tick[8];
-        } snapshot_info;
 
         struct {
             i32 count;
             sound_event sounds[128];
         } command_callback_info;
 
-        struct {
-            i32 count;
-            game_state snapshots[6];
-        } snap_data;
-
-        command_t command;
+        // transient
+        snapshot_t snapshot;
     } data;
 };
 

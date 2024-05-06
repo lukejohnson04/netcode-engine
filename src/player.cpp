@@ -35,10 +35,9 @@ struct command_t {
     u8 code;
     // this is false if the command is being released instead of pressed
     bool press;
-    int tick;
+    i32 tick;
     // dont initialize until you send bc it doesnt matter
-    u32 sending_id=ID_DONT_EXIST;
-    double time;
+    entity_id sending_id=ID_DONT_EXIST;
 
     union {
         entity_id obj_id;
@@ -54,9 +53,8 @@ struct command_sort_by_time {
 };
 
 
-
 bool operator==(const command_t &left, const command_t &right) {
-    return left.props.rot == right.props.rot && left.tick == right.tick && left.code == right.code && left.time == right.time && left.press == right.press && left.sending_id == right.sending_id;
+    return left.tick == right.tick && left.code == right.code && left.press == right.press && left.sending_id == right.sending_id;
 }
 
 // struct that acts as a non strict combination of commands and actions
@@ -129,7 +127,7 @@ struct character {
     } state;
 
     Color color={255,255,255,255};
-    u32 id=ID_DONT_EXIST;
+    entity_id id=ID_DONT_EXIST;
 
     bool command_state[CMD_COUNT];
 };
