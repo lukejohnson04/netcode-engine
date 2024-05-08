@@ -106,7 +106,7 @@ static void GameGUIStart() {
     }
 
     char winstr[] = "Client x";
-    winstr[7] = client_st.client_id + '0';
+    winstr[7] = (char)client_st.client_id + '0';
     window = SDL_CreateWindow(winstr,
                               SDL_WINDOWPOS_UNDEFINED,
                               SDL_WINDOWPOS_UNDEFINED,
@@ -190,8 +190,8 @@ static void GameGUIStart() {
 
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
-    printf("transient size: %d\n",game_state_transient_data_size);
-    printf("permanent size: %d\n",game_state_permanent_data_size);
+    //printf("transient size: %d\n",game_state_transient_data_size);
+    //printf("permanent size: %d\n",game_state_permanent_data_size);
 
     
     while (running) {
@@ -203,10 +203,21 @@ static void GameGUIStart() {
         }
 
         if (client_st.gms.state == GMS::GAME_PLAYING) {
-            i32 prev_wall_count=gs.wall_count;
+            if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
+                client_st.NetState.interp_delay--;
+                // TODO: pull interp delay out of netstate and put it in client_t
+                // The server never has an interp delay so it doesn't make sense for
+                // it to be a shared variable
+                client_st.NetState.interp_delay = MAX(client_st.NetState.interp_delay,2);
+                printf("Changed interp delay to %d\n",client_st.NetState.interp_delay);
+            } else if (input.just_pressed[SDL_SCANCODE_RIGHTBRACKET]) {
+                client_st.NetState.interp_delay++;
+                printf("Changed interp delay to %d\n",client_st.NetState.interp_delay);
+            }
+            
+            i32 prev_wall_count=mp.wall_count;
             update_player_controller(player,target_tick,&game_camera);
             
-            // load a snapshot from 100ms ago            
             bool update_health_display=false;
             int p_health_before_update = player ? player->health : 0;
             int p_money_before_update = player ? gs.money[player->id] : 0;
@@ -228,31 +239,30 @@ static void GameGUIStart() {
                 } else {
                     goto snapshot_merge_finish;
                 }
-                auto &snapshots = client_st.NetState.snapshots;
-                // load the last snapshot we had an input processed on
-                std::sort(snapshots.begin(),snapshots.end(),[](auto&left,auto&right) {
-                    return left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
-                    });
-                /*
-                std::sort(snapshots.begin(),snapshots.end(),[](auto&left,auto&right) {
-                    return left.gms.tick < right.gms.tick;
-                });
 
-                for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
-                    if (snap->gms.tick < target_tick) {
-                        gs = snap->gms;
-                        break;
+                client_st.last_command_processed_by_server = MAX(client_st._last_proc_tick_buffer,client_st.last_command_processed_by_server);
+                for (auto node:client_st.NetState.command_stack) {
+                    if (node.verified) continue;
+                    if (node.cmd.tick<=client_st.last_command_processed_by_server && node.cmd.tick >= client_st.last_command_processed_by_server-CLIENT_TICK_BUFFER_FOR_SENDING_COMMANDS) {
+                        node.verified=true;
                     }
                 }
-                */
-                gs = snapshots.back().gms;
-                //load_snapshot(&gs,&snapshots.back());
+
                 
-                //i32 last_tick_processed = snapshots.back().last_processed_command_tick[client_st.client_id];
-                // find the snapshot before the target tick with the most recently processed client commands
+                // load the last snapshot we had an input processed on
+                
+                // load right before the
+                // TODO: Keep track of EXACTLY which commands are verified and not.
+                // that way, when there's packet loss, we can load the gamestate from
+                // our last NON VERIFIED command
+                //gs = snapshots.back().gms;
+                std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](auto&left,auto&right) {
+                    return left.gms.tick < right.gms.tick;//left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
+                });
+                gs = client_st.NetState.snapshots.back().gms;
                 /*
-                for (auto &snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
-                    if (snap->gms.tick <= last_tick_processed) {
+                for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
+                    if (snap->gms.tick <= target_tick-5) {
                         gs = snap->gms;
                         break;
                     }
@@ -260,14 +270,16 @@ static void GameGUIStart() {
                 */
                 
         snapshot_merge_finish:
-                for (auto snap=snapshots.begin();snap<snapshots.end();snap++) {
+                
+                /*for (auto snap=snapshots.begin();snap<snapshots.end();snap++) {
                     if (snap->gms.tick < target_tick - 180) {
                         snap = snapshots.erase(snap);
                         snap--;
                     } else {
                         break;
                     }
-                }
+                    }*/
+                //client_st.NetState.snapshots.clear();
                 ReleaseMutex(client_st._mt_merge_snapshots);
             }
             
@@ -325,16 +337,16 @@ static void GameGUIStart() {
 
                 // this whole process of finding interp snapshots only needs to be done once for all players btw
                 for (i32 ind=(i32)client_st.NetState.snapshots.size()-1;ind>=0;ind--){
-                    snapshot_t &snap = client_st.NetState.snapshots[ind];
+                    snapshot_t *snap = &client_st.NetState.snapshots[ind];
                 
-                    if (snap.gms.tick == interp_tick) {
-                        exac_snap=&snap;
+                    if (snap->gms.tick == interp_tick) {
+                        exac_snap = snap;
                         break;
-                    } else if (snap.gms.tick>interp_tick) {
-                        next_snap = &snap;
+                    } else if (snap->gms.tick>interp_tick) {
+                        next_snap = snap;
                 
-                    } else if (snap.gms.tick<interp_tick) {
-                        prev_snap = &snap;
+                    } else if (snap->gms.tick<interp_tick) {
+                        prev_snap = snap;
                         break;
                     }
                 }
@@ -342,20 +354,22 @@ static void GameGUIStart() {
                     printf("No snapshots to interpolate between\n");
                 } else {
                     FORn(gs.players,gs.player_count,chara) {
-                        if (chara->curr_state==character::TAKING_DAMAGE) {
-                            continue;
-                        }
                         if (chara==player) {
+                            continue;
+                        } else if (chara->id == player->id || chara->id == client_st.client_id) {
+                            printf("WHATHTEFUCKCKJKCKCJ\n");
+                        }
+                        if (chara->curr_state==character::TAKING_DAMAGE) {
                             continue;
                         }
 
                         if (exac_snap) {
                             chara->pos = exac_snap->gms.players[chara->id].pos;
                         } else if (next_snap && prev_snap) {
-                            v2 prev_pos = prev_snap->gms.players[player->id].pos;
-                            v2 next_pos = next_snap->gms.players[player->id].pos;
+                            v2 prev_pos = prev_snap->gms.players[chara->id].pos;
+                            v2 next_pos = next_snap->gms.players[chara->id].pos;
                             float f = (float)(interp_tick-prev_snap->gms.tick) / (float)(next_snap->gms.tick-prev_snap->gms.tick);
-                            player->pos = lerp(prev_pos,next_pos,f);
+                            chara->pos = lerp(prev_pos,next_pos,f);
                         }
                     }
                 }
@@ -370,7 +384,7 @@ static void GameGUIStart() {
                     // dont play a command twice
                     if (event->played) continue;
                     i32 t = event->tick;
-                    if (event->id != client_st.client_id) {
+                    if (event->id != (entity_id)client_st.client_id) {
                         t -= client_st.NetState.interp_delay;
                     }
                     if (t <= target_tick) {
@@ -418,8 +432,8 @@ static void GameGUIStart() {
                 auto &rps = client_sided_render_geometry.raycast_points;
                 rps.clear();
                 client_sided_render_geometry.segments.clear();
-                for (i32 n=0; n<gs.wall_count; n++) {
-                    v2i wall=gs.walls[n];
+                for (i32 n=0; n<mp.wall_count; n++) {
+                    v2i wall=mp.walls[n];
                     rps.push_back(v2(wall.x,wall.y)*64);
                     rps.push_back(v2(wall.x+1,wall.y)*64);
                     rps.push_back(v2(wall.x,wall.y+1)*64);
@@ -455,8 +469,8 @@ static void GameGUIStart() {
                     
                 }
                 
-                for (i32 ind=0; ind<gs.wall_count; ind++) {
-                    v2 wall=gs.walls[ind];
+                for (i32 ind=0; ind<mp.wall_count; ind++) {
+                    v2 wall=mp.walls[ind];
                     v2 p1 = v2(wall.x,wall.y)*64;
                     v2 p2 = v2(wall.x+1,wall.y)*64;
                     v2 p3 = v2(wall.x,wall.y+1)*64;
@@ -504,11 +518,15 @@ static void GameGUIStart() {
             }
             render_game_state(sdl_renderer,player,&game_camera);
             // gui
-            SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
-            SDL_RenderCopy(sdl_renderer,gui_elements.money_text.texture,NULL,&gui_elements.money_text.get_draw_rect());
+            SDL_Rect health_rect,money_rect;
+            health_rect = gui_elements.health_text.get_draw_rect();
+            money_rect = gui_elements.money_text.get_draw_rect();
+            SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&health_rect);
+            SDL_RenderCopy(sdl_renderer,gui_elements.money_text.texture,NULL,&money_rect);
             if (player) {
                 if (player->reloading) {
-                    SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&gui_elements.reload_text.get_draw_rect());
+                    SDL_Rect reload_rect = gui_elements.reload_text.get_draw_rect();
+                    SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&reload_rect);
                 }
             }
 
@@ -527,9 +545,13 @@ static void GameGUIStart() {
                 left_text.position = {middle_text.position.x - left_text.get_draw_rect().w-16,middle_text.position.y};
                 right_text.position = {middle_text.position.x + middle_text.get_draw_rect().w+16,middle_text.position.y};
 
-                SDL_RenderCopy(sdl_renderer,left_text.texture,NULL,&left_text.get_draw_rect());
-                SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_text.get_draw_rect());
-                SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_text.get_draw_rect());
+                SDL_Rect left_rect,middle_rect,right_rect;
+                left_rect = left_text.get_draw_rect();
+                middle_rect = middle_text.get_draw_rect();
+                right_rect = right_text.get_draw_rect();
+                SDL_RenderCopy(sdl_renderer,left_text.texture,NULL,&left_rect);
+                SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_rect);
+                SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_rect);
             }
             
             if (player) {
@@ -541,8 +563,9 @@ static void GameGUIStart() {
 
                     // render the box
                     SDL_Rect dest = sprite->get_draw_rect();
+                    SDL_Rect sp_rect = sprite->get_draw_rect();
                     SDL_RenderCopy(sdl_renderer,textures[TexType::UI_TEXTURE],NULL,&dest);
-                    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sprite->get_draw_rect());
+                    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sp_rect);
                     if (ind==0 && player->invisibility_cooldown > 0) {
                         render_ability_sprite(sprite,player->invisibility_cooldown,sdl_renderer);
                     } else if (ind == 1 && player->shield_cooldown > 0) {
@@ -562,7 +585,8 @@ static void GameGUIStart() {
                     auto ab_pos = gui_elements.ability_sprites[3].get_draw_rect();
                     gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
                 }
-                SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&gui_elements.magazine_cnt_text.get_draw_rect());
+                SDL_Rect ammo_rect = gui_elements.magazine_cnt_text.get_draw_rect();
+                SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&ammo_rect);
             }
 
             // buy menu
@@ -629,7 +653,8 @@ static void GameGUIStart() {
                 }
 
                 if (chatbox_entry.texture) {
-                    SDL_RenderCopy(sdl_renderer,chatbox_entry.texture,NULL,&chatbox_entry.get_draw_rect());
+                    SDL_Rect chat_rect = chatbox_entry.get_draw_rect();
+                    SDL_RenderCopy(sdl_renderer,chatbox_entry.texture,NULL,&chat_rect);
                 }
             }
             
@@ -643,7 +668,8 @@ static void GameGUIStart() {
                         //SDL_SetTextureColorMod(sdl_renderer,chatlog_display.sprites[ind].texture,255,255,255,a);
                         SDL_SetTextureAlphaMod(chatlog_display.sprites[ind].texture,a);
                     }
-                    SDL_RenderCopy(sdl_renderer,chatlog_display.sprites[ind].texture,NULL,&chatlog_display.sprites[ind].get_draw_rect());
+                    SDL_Rect chat_disp_rect = chatlog_display.sprites[ind].get_draw_rect();
+                    SDL_RenderCopy(sdl_renderer,chatlog_display.sprites[ind].texture,NULL,&chat_disp_rect);
                 }
             }
 
@@ -657,12 +683,7 @@ static void GameGUIStart() {
                 i32 interp_tick = target_tick-client_st.NetState.interp_delay;
                 i32 begin_tick = end_tick-60;
 
-                i32 last_proc_tick=0;
-                for (auto &snap:client_st.NetState.snapshots) {
-                    if (snap.last_processed_command_tick[client_st.client_id] > last_proc_tick) {
-                        last_proc_tick = snap.last_processed_command_tick[client_st.client_id];
-                    }
-                }
+                i32 last_proc_tick=client_st.last_command_processed_by_server;
 
                 SDL_Rect graph_box_rect = {16,16,880,100};
                 int padding=20;
@@ -698,10 +719,8 @@ static void GameGUIStart() {
                         SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
                     }
                     i32 count=0;
-                    i32 most_recently_proc=0;
                     for (auto &snap:client_st.NetState.snapshots) {
                         if (snap.gms.tick==ind) {
-                            most_recently_proc = MAX(most_recently_proc,snap.last_processed_command_tick[client_st.client_id]);
                             count++;
                         }
                     }
@@ -709,7 +728,7 @@ static void GameGUIStart() {
                         if (last_proc_tick > ind) {
                             SDL_SetRenderDrawColor(sdl_renderer,0,255,0,255);
                         } else {
-                            SDL_SetRenderDrawColor(sdl_renderer,100,100,100+(count/5),255);
+                            SDL_SetRenderDrawColor(sdl_renderer,100,100,100+((u8)count/5),255);
                         }
                         SDL_Rect r = {p1.x-(stride/2),timeline_p1y-8,stride,16};
                         // draw a rectangle
@@ -736,9 +755,12 @@ static void GameGUIStart() {
                 generic_drawable last_proc = generate_text(sdl_renderer,m5x7,last_input_processed_by_server_str, col);
                 last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_rect().h + 4);
                 last_proc.scale = {2,2};
-                
-                SDL_RenderCopy(sdl_renderer,curr_tick.texture,NULL,(SDL_Rect*)&curr_tick.get_draw_rect());
-                SDL_RenderCopy(sdl_renderer,last_proc.texture,NULL,(SDL_Rect*)&last_proc.get_draw_rect());
+
+                SDL_Rect currtick_rect,lastproc_rect;
+                currtick_rect=curr_tick.get_draw_rect();
+                lastproc_rect = last_proc.get_draw_rect();
+                SDL_RenderCopy(sdl_renderer,curr_tick.texture,NULL,(SDL_Rect*)&currtick_rect);
+                SDL_RenderCopy(sdl_renderer,last_proc.texture,NULL,(SDL_Rect*)&lastproc_rect);
                 
                 
             }

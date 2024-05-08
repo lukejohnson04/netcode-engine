@@ -181,17 +181,12 @@ v2 lerp(v2 a, v2 b, float f) {
 
 struct Color {
     Color(u8 nr,u8 ng,u8 nb,u8 na=255) : r(nr),g(ng),b(nb),a(na) {}
-    union {
-        struct {
-            u8 r,g,b,a;
-        };
-        u32 hex;
-    };
+    u8 r,g,b,a;
 };
 
 
-inline bool operator==(Color &left, Color &right) {
-    return left.hex==right.hex;
+inline bool operator==(Color left, Color right) {
+    return *(u32*)&left == *(u32*)&right;
 }
 
 

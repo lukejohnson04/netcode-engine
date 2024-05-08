@@ -4,6 +4,7 @@ struct server_client_t {
     i64 connection_time;
     int ping;
     i32 last_processed_command=0;
+    v2i last_captured_command_times={0,0};
 };
 
 struct server_t {
@@ -77,7 +78,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                    ntohs(clientaddr.sin_port));
             packet_t res = {};
             res.type = CONNECTION_ACCEPTED;
-            res.data.connection_dump.id = gl_server.client_count;
+            res.data.connection_dump.id = (entity_id)gl_server.client_count;
 
             volatile LARGE_INTEGER t_2 = gl_server.timer.get_high_res_elapsed();
             printf("Request recieved");
@@ -122,7 +123,7 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                 sockaddr_in _cl_to_comp = gl_server.clients[ind];
                 
                 if ((_cl_to_comp.sin_addr.s_addr == clientaddr.sin_addr.s_addr) && (_cl_to_comp.sin_port == clientaddr.sin_port)) {
-                    client_id = ind;
+                    client_id = (entity_id)ind;
                     break;
                 }
             }
@@ -134,6 +135,12 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
                 command_t cmd = p.data.command_data.commands[ind];
                 gl_server.merge_commands.push_back(cmd);
             }
+            // if we recieve commands that start after the end of the last block recieved, we must have a gap!
+            v2i last_cmd_block = gl_server.s_clients[client_id].last_captured_command_times;
+            if (p.data.command_data.start_tick > last_cmd_block.y) {
+                printf("Command gap between %d and %d for client %d\n",last_cmd_block.y,p.data.command_data.start_tick,client_id);
+            }
+            gl_server.s_clients[client_id].last_captured_command_times = {p.data.command_data.start_tick,p.data.command_data.end_tick};
             gl_server.last_proc_command_buffer[client_id] = MAX(gl_server.last_proc_command_buffer[client_id],MAX(gl_server.s_clients[client_id].last_processed_command,p.data.command_data.end_tick));
             
             ReleaseMutex(gl_server._mt_merge_commands);
@@ -154,8 +161,6 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
     }
     return 0;
 }
-
-
 
 static void server(int port) {
     TCHAR szNewTitle[MAX_PATH];
@@ -186,7 +191,7 @@ static void server(int port) {
     // fill out info
     sockaddr_in servaddr, clientaddr;
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(port);
+    servaddr.sin_port = htons((u_short)port);
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     // bind
@@ -271,7 +276,7 @@ static void server(int port) {
     // make the snapshot buffer greater if some of the players have very high ping
     // set to 7 over wan
     // can be super low on lan
-    int snapshot_buffer=2;
+    int snapshot_buffer=0;
     int target_tick=0;
     // interp delay on clients should always be below the snapshot buffer on the server
 
@@ -279,7 +284,7 @@ static void server(int port) {
     // lower snapshot rate significantly
 
     entity_id spectate_player=ID_DONT_EXIST;
-    camera_t game_camera;    
+    camera_t game_camera;
     
     // tick thread
     while (running) {
@@ -326,7 +331,11 @@ static void server(int port) {
 
                     if (earliest_new_cmd_tick!=-1) {
                         i32 tick_before=gs.tick;
+                        if (gs.tick-earliest_new_cmd_tick > 180) {
+                            printf("WARNING: Loading 3 seconds back in time!!!\n");
+                        }
                         find_and_load_gamestate_snapshot(gs,gl_server.NetState,earliest_new_cmd_tick);
+                        // NOTE: check if we can comment this out
                         load_game_state_up_to_tick(gs,gl_server.NetState,tick_before);
                     }
                     
@@ -334,40 +343,43 @@ static void server(int port) {
                     ReleaseMutex(gl_server._mt_merge_commands);
                 }
                 
-                load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
-
+                
                 if (target_tick-snapshot_buffer >= 0) {
-                    snapshot_t snap = {};
-                    snap.gms = gs;
-                    //memcpy(snap.transient_data,gs.transient_data_begin,game_state_transient_data_size);
-                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                        snap.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
-                    }
-                    gl_server.NetState.snapshots.push_back(snap);
+                    load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
 
+                    {
+                        snapshot_t snap = {};
+                        snap.gms = gs;
+                        for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                            snap.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                        }
+                        gl_server.NetState.snapshots.push_back(snap);
+                    }
+                    
                     for (i32 client_id=0;client_id<(i32)gl_server.client_count;client_id++) {
                         // send each client a personalized snapshot that matches up to the last command received from them
                         packet_t p = {};
                         p.type = SNAPSHOT_TRANSIENT_DATA;
-                        
-                        i32 update_tick = gl_server.s_clients[client_id].last_processed_command - snapshot_buffer;
-                        if (update_tick<0) continue;
 
-                        if (update_tick<target_tick) {
-                            find_and_load_gamestate_snapshot(p.data.snapshot.gms,gl_server.NetState,update_tick);
+                        i32 last_proc_command = gl_server.s_clients[client_id].last_processed_command;
+                        // either update to the last EXACT update (i.e. where every client has processed all inputs)
+                        // OR leave a little buffer
+                        if (last_proc_command >= gs.tick) {
+                            p.data.snapshot.gms = gs;
+                        } else {
+                            i32 update_tick = last_proc_command;
+                            if (update_tick<0) continue;
+
+                            if (update_tick<gs.tick) {
+                                find_and_load_gamestate_snapshot(gs,gl_server.NetState,update_tick);
+                            }
+                            load_game_state_up_to_tick(gs,gl_server.NetState,update_tick,true);
+                            p.data.snapshot.gms = gs;
                         }
-                        load_game_state_up_to_tick(p.data.snapshot.gms,gl_server.NetState,update_tick,false);
-
-                        //memcpy(p.data.snapshot.transient_data,gs.transient_data_begin,game_state_transient_data_size);
-                        p.data.snapshot.last_processed_command_tick[client_id] = update_tick;
+                        p.data.snapshot.last_processed_command_tick[client_id] = last_proc_command;
                         send_packet(gl_server.socket,&gl_server.clients[client_id],&p);
-
-                        // last processed command data
-                        //for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                        //    p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
-                        //}
                     }
-                    //printf("%d processed commands\n",(i32)gl_server.NetState.command_stack.size());
+
 
                     /*
                     // NOTE: add snapshot
@@ -376,11 +388,12 @@ static void server(int port) {
                     p.data.snapshot.gms = gs;
                     // last processed command data
                     for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                    p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                        p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
                     }
 
                     broadcast(&p);
                     */
+                    
                     
                     // send the last 6 ticks worth of snapshots
                     // that way the server doesn't need to buffer any snapshots, and the client just overwrites
@@ -400,6 +413,17 @@ static void server(int port) {
                         p.data.command_callback_info.sounds[p.data.command_callback_info.count++] = event;
                     }
                     broadcast(&p);
+                    
+                    // delete old snapshots
+                    // OK but why are we loading snapshots from like, many seconds ago in the first place???
+                    for (auto snap=gl_server.NetState.snapshots.begin();snap<gl_server.NetState.snapshots.end();) {
+                        if (snap->gms.tick < target_tick-240) {
+                            snap = gl_server.NetState.snapshots.erase(snap);
+                        } else {
+                            snap++;
+                        }
+                    }
+
                 }
                 new_frame_ready=true;
 
@@ -414,6 +438,14 @@ static void server(int port) {
                             spectate_player = ID_DONT_EXIST;
                         }
                     }
+                }
+                if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
+                    snapshot_buffer--;
+                    snapshot_buffer = MAX(snapshot_buffer,0);
+                    printf("Changed snapshot buffer to %d\n",snapshot_buffer);
+                } else if (input.just_pressed[SDL_SCANCODE_RIGHTBRACKET]) {
+                    snapshot_buffer++;
+                    printf("Changed snapshot buffer to %d\n",snapshot_buffer);
                 }
 
                 if (spectate_player != ID_DONT_EXIST) {
@@ -498,14 +530,14 @@ endof_frame:
         // when calculating current frame times and how long to sleep
 
         // TODO: GET RID OF THIS!!! Once things are working again!!!
+        
         if (gl_server.gms.state == GMS::GAME_PLAYING) {
             // sleep to next tick
-            double len = snap_delta - snap_clock.get() - (snap_delta / 10.0);
+            double len = snap_delta - snap_clock.get() - (snap_delta / 8.0);
             if (len > 0) {
                 SDL_Delay(u32(len*1000.0));
             }
         }
-
     }
     closesocket(gl_server.socket);
 }

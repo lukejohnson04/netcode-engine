@@ -1,5 +1,4 @@
 
-
 struct server_header_t {
     double command_sliding_window_len = 0.5;
     int tickrate=40;

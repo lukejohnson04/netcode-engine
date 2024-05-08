@@ -140,8 +140,9 @@ generic_drawable generate_text(SDL_Renderer *sdl_renderer,TTF_Font *font,std::st
 
 TTF_Font *m5x7=nullptr;
 
-void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *sdl_renderer) {                        
-    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sprite->get_draw_rect());
+void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *sdl_renderer) {
+    SDL_Rect draw_rect = sprite->get_draw_rect();
+    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&draw_rect);
     if (timer > 0) {
         std::string cooldown_str = std::to_string(timer);
         if (cooldown_str.size()>3) {
@@ -154,7 +155,8 @@ void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *s
         }
         generic_drawable cooldown_text = generate_text(sdl_renderer,m5x7,cooldown_str,{255,0,0,0});
         cooldown_text.position = {sprite->position.x + 40,sprite->position.y + sprite->get_draw_rect().h - 16};
-        SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cooldown_text.get_draw_rect());
+        SDL_Rect cl_draw_rect = cooldown_text.get_draw_rect();
+        SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cl_draw_rect);
     }
 }
 

@@ -41,6 +41,7 @@ struct client_t {
     // mutex
     HANDLE _mt_merge_snapshots;
     bool _new_merge_snapshot=false;
+    i32 _last_proc_tick_buffer=0;
 };
 
 
@@ -74,14 +75,8 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
 
             client_st.merge_snapshots.push_back(pc.data.snapshot);
-            i32 proc_tick = pc.data.snapshot.last_processed_command_tick[client_st.client_id];
-            for (auto node:client_st.NetState.command_stack) {
-                if(node.cmd.tick<=proc_tick) {
-                    node.verified=true;
-                }
-            }
             client_st._new_merge_snapshot = true;
-            client_st.last_command_processed_by_server = MAX(pc.data.snapshot.last_processed_command_tick[client_st.client_id],client_st.last_command_processed_by_server);
+            client_st._last_proc_tick_buffer=MAX(client_st._last_proc_tick_buffer,pc.data.snapshot.last_processed_command_tick[client_st.client_id]);
 
             ReleaseMutex(client_st._mt_merge_snapshots);
             
@@ -98,9 +93,9 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {
             client_st.gms.game_start_time = pc.data.game_start_info.start_time;
             client_st.gms.counting_down_to_game_start=true;
-            // full gs mutex
             load_permanent_data_from_map(pc.data.game_start_info.map_id);
             client_st.loaded_new_map=true;
+
         } else if (pc.type == CHAT_MESSAGE) {
             printf("Received chat message from the server\n");
             std::string name(pc.data.chat_message.name);
@@ -184,7 +179,7 @@ static void client_connect(int port,std::string ip_addr) {
         client_st.server_header = p.data.connection_dump.server_header;
 
         // whatever is higher - 6 or 4 ticks plus the amount of ticks of ping you have
-        client_st.NetState.interp_delay = MAX(6,4 + (int)ceil(((client_st.ping/1000.0)/2.0)/(1.0/60.0) * 1.75));
+        client_st.NetState.interp_delay = MAX(6,4 + (int)ceil(((client_st.ping/1000.0)/2.0)/(1.0/60.0) * 1.25));
         printf("Interp delay of %d\n",client_st.NetState.interp_delay);
 
         printf("Connection accepted\n");
@@ -221,6 +216,9 @@ static void client_connect(int port,std::string ip_addr) {
     GameGUIStart();
 }
 
+#define CLIENT_TICK_BUFFER_FOR_SENDING_COMMANDS 30
+
+
 static void client_send_input(int curr_tick) {
     // really we should be sending the last second or so of commands
     // to combat packet loss, but we won't worry about that for now
@@ -229,17 +227,21 @@ static void client_send_input(int curr_tick) {
     p.type = COMMAND_DATA;
     p.data.command_data = {};
 
-    i32 start_tick = curr_tick - 30;
+    i32 start_tick = curr_tick - CLIENT_TICK_BUFFER_FOR_SENDING_COMMANDS;
     i32 end_tick = curr_tick;
     p.data.command_data.count=0;
-    
+
+    // cmd tick can be equal to either start tick or end tick
     for (auto node=client_st.NetState.command_stack.begin();node<client_st.NetState.command_stack.end();node++) {
         if (node->cmd.tick < start_tick) {
-            if (node->cmd.tick < end_tick - 120) {
+            /*
+            if (node->cmd.tick < end_tick - 180) {
                 node = client_st.NetState.command_stack.erase(node);
                 node--;
                 continue;
             }
+            */
+            continue;
         }
         
         if (node->cmd.tick > end_tick) {

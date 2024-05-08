@@ -147,7 +147,7 @@ struct character {
     bool command_state[CMD_COUNT];
 };
 
-character create_player(v2 pos,u32 nid) {
+character create_player(v2 pos,entity_id nid) {
     character p={};
     p.pos = pos;
     p.vel = {0,0};

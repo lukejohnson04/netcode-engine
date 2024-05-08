@@ -21,11 +21,7 @@ enum ROUND_STATE {
     ROUND_STATE_COUNT
 };
 
-
-// should be called world state instead of game state
-struct game_state {
-    // this is map data, not game state data!
-    // and can be removed completely
+struct map_t {
     i32 wall_count=0;
     v2i walls[512];
 
@@ -36,15 +32,17 @@ struct game_state {
 
     i32 spawn_counts[TEAM_COUNT];
     v2i spawns[TEAM_COUNT][32];
+};
 
-    void* transient_data_begin = nullptr;
-    
+// should be called world state instead of game state
+struct game_state {
+    // this is map data, not game state data!
+    // and can be removed completely    
     i32 player_count=0;
     character players[8];
 
     i32 bullet_count=0;
     bullet_t bullets[64];
-
 
     // should abstract these net variables out eventually
     i32 score[8] = {0};
@@ -74,18 +72,14 @@ struct game_state {
     void update(netstate_info_t &c, double delta);
 };
 
-constexpr i32 game_state_permanent_data_size = offsetof(game_state, transient_data_begin);
+constexpr i32 game_state_permanent_data_size = offsetof(game_state, player_count);
 constexpr i32 game_state_transient_data_size = sizeof(game_state) - game_state_permanent_data_size;
 
 struct snapshot_t {
     game_state gms;
     i32 last_processed_command_tick[16];
+    i32 map;
 };
-
-/*void load_snapshot(game_state *gms,snapshot_t *snap) {
-    memcpy(gms->transient_data_begin,snap->transient_data,game_state_transient_data_size);
-}
-*/
 
 
 enum GMS {
@@ -131,14 +125,16 @@ struct netstate_info_t {
 
 
 global_variable game_state gs;
+global_variable map_t mp;
+
 
 static void add_player() {
-    u32 id = gs.player_count++;
+    entity_id id = (entity_id)(gs.player_count++);
     gs.players[id] = create_player({0,0},id);
 }
 
 static void add_wall(v2i wall) {
-    gs.walls[gs.wall_count++] = wall;
+    mp.walls[mp.wall_count++] = wall;
 }
 
 static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
@@ -228,12 +224,12 @@ enum {
 void load_permanent_data_from_map(i32 map) {
     SDL_Surface *level_surface = IMG_Load("res/map.png");
 
-    gs.wall_count=0;
-    gs.bombsite_count=0;
-    i32 &ct_spawn_count=gs.spawn_counts[COUNTER_TERRORIST];
-    v2i *ct_spawns=gs.spawns[COUNTER_TERRORIST];
-    i32 &t_spawn_count=gs.spawn_counts[TERRORIST];
-    v2i *t_spawns = gs.spawns[TERRORIST];
+    mp = {};
+    
+    i32 &ct_spawn_count=mp.spawn_counts[COUNTER_TERRORIST];
+    v2i *ct_spawns=mp.spawns[COUNTER_TERRORIST];
+    i32 &t_spawn_count=mp.spawn_counts[TERRORIST];
+    v2i *t_spawns = mp.spawns[TERRORIST];
 
     ct_spawn_count=0;
     t_spawn_count=0;
@@ -245,26 +241,26 @@ void load_permanent_data_from_map(i32 map) {
             SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
             if (col == Color(0,0,0,255)) {
                 add_wall({x,y});
-                gs.tiles[x][y] = TT_WALL;
+                mp.tiles[x][y] = TT_WALL;
             } else if (col == Color(255,0,0,255)) {
                 t_spawns[t_spawn_count++] = {x,y};
             } else if (col == Color(255,255,0,255)) {
                 ct_spawns[ct_spawn_count++] = {x,y};
             } else if (col == Color(0,0,255,255)) {
-                gs.bombsite[gs.bombsite_count++] = {x,y};
-                gs.tiles[x][y] = TT_BOMBSITE;
+                mp.bombsite[mp.bombsite_count++] = {x,y};
+                mp.tiles[x][y] = TT_BOMBSITE;
             } else if (col.a == 0) {
-                gs.tiles[x][y] = TT_GROUND;
+                mp.tiles[x][y] = TT_GROUND;
             } else if (col == Color(241,0,255)) {
-                gs.tiles[x][y] = TT_AA;
+                mp.tiles[x][y] = TT_AA;
             } else if (col == Color(0,255,0)) {
-                gs.tiles[x][y] = TT_A;
+                mp.tiles[x][y] = TT_A;
             } else if (col == Color(248,130,255)) {
-                gs.tiles[x][y] = TT_ARROW_UPLEFT;
+                mp.tiles[x][y] = TT_ARROW_UPLEFT;
             } else if (col == Color(120,255,120)) {
-                gs.tiles[x][y] = TT_ARROW_UPRIGHT;
+                mp.tiles[x][y] = TT_ARROW_UPRIGHT;
             } else {
-                gs.tiles[x][y] = TT_GROUND;
+                mp.tiles[x][y] = TT_GROUND;
             }
         }
     }
@@ -275,9 +271,7 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
     gms.state = GAME_PLAYING;
 
     gs.bullet_count=0;
-    gs.wall_count=0;
     gs.one_remaining_tick=0;
-    gs.bombsite_count=0;
     gs.bomb_planted_tick=0;
     gs.bomb_defused_tick=0;
     gs.bomb_planted=false;
@@ -290,10 +284,10 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
     gs.player_count=0;
 
     i32 side_count[TEAM_COUNT]={0};    
-    i32 unused_count[TEAM_COUNT]={gs.spawn_counts[TERRORIST],gs.spawn_counts[COUNTER_TERRORIST]};
+    i32 unused_count[TEAM_COUNT]={mp.spawn_counts[TERRORIST],mp.spawn_counts[COUNTER_TERRORIST]};
     v2i unused_spawns[TEAM_COUNT][32];
-    memcpy(unused_spawns[TERRORIST],gs.spawns[TERRORIST],32*sizeof(v2i));
-    memcpy(unused_spawns[COUNTER_TERRORIST],gs.spawns[COUNTER_TERRORIST],32*sizeof(v2i));
+    memcpy(unused_spawns[TERRORIST],mp.spawns[TERRORIST],32*sizeof(v2i));
+    memcpy(unused_spawns[COUNTER_TERRORIST],mp.spawns[COUNTER_TERRORIST],32*sizeof(v2i));
 
     for (i32 ind=0; ind<gms.connected_players; ind++) {
         gs.money[ind] = FIRST_ROUND_START_MONEY;
@@ -307,11 +301,11 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
             add_player();
         
             int total_color_points=rand() % 255 + (255+200);
-            gs.players[gs.player_count-1].color.r = rand()%MIN(255,total_color_points);
+            gs.players[gs.player_count-1].color.r = (u8)(rand()%MIN(255,total_color_points));
             total_color_points-=gs.players[gs.player_count-1].color.r;
-            gs.players[gs.player_count-1].color.g = rand()%MIN(255,total_color_points);
+            gs.players[gs.player_count-1].color.g = (u8)(rand()%MIN(255,total_color_points));
             total_color_points-=gs.players[gs.player_count-1].color.g;
-            gs.players[gs.player_count-1].color.b = total_color_points;
+            gs.players[gs.player_count-1].color.b = (u8)total_color_points;
         }
 
         TEAM n_team;
@@ -336,12 +330,13 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
     gs.buytime_end_tick = gs.round_start_tick + (BUYTIME_LENGTH * 60);
 }
 
+/*
 void load_gamestate_for_round(overall_game_manager &gms) {
     gms.state = GMS::GAME_PLAYING;
     SDL_Surface *level_surface = IMG_Load("res/map.png");
 
     gs.bullet_count=0;
-    gs.wall_count=0;
+    mp.wall_count=0;
     gs.one_remaining_tick=0;
     gs.bombsite_count=0;
     gs.bomb_planted_tick=0;
@@ -395,6 +390,7 @@ void load_gamestate_for_round(overall_game_manager &gms) {
     // start in 5 seconds
     gs.round_start_tick = gs.tick + 300;
 }
+*/
 
 internal void on_bomb_plant_finished(entity_id id, i32 tick) {
     gs.bomb_planted_tick = tick;
@@ -521,13 +517,13 @@ void game_state::update(netstate_info_t &c, double delta) {
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
         bool planting_before_update = obj->curr_state == character::PLANTING;
-        update_player(obj,delta,wall_count,walls,player_count,players,bombsite_count,bombsite,tick,planted_before_tick,bomb_plant_location);
+        update_player(obj,delta,mp.wall_count,mp.walls,player_count,players,mp.bombsite_count,mp.bombsite,tick,planted_before_tick,bomb_plant_location);
     }
 
     FOR(bullets,bullet_count) {
         obj->position += obj->vel*delta;
         // if a bullet hits a wall delete it
-        FORn(walls,wall_count,wall) {
+        FORn(mp.walls,mp.wall_count,wall) {
             fRect b_hitbox = {obj->position.x,obj->position.y,16.f,16.f};
             fRect wall_rect = {wall->x*64.f,wall->y*64.f,64.f,64.f};
             if (rects_collide(b_hitbox,wall_rect)) {
@@ -618,7 +614,7 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
     for (i32 x=0; x<MAX_MAP_SIZE; x++) {
         for (i32 y=0; y<MAX_MAP_SIZE; y++) {
-            i32 type = gs.tiles[x][y];
+            i32 type = mp.tiles[x][y];
             SDL_Rect dest = {x*64+cam_mod.x,y*64+cam_mod.y,64,64};
             SDL_Rect src={0,0,16,16};
             if (type == TT_GROUND) {
@@ -786,7 +782,8 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         round_start_timer = generate_text(sdl_renderer,m5x7,timer_str,{255,0,0,255});
         round_start_timer.scale = scale;
         round_start_timer.position = {1280/2-round_start_timer.get_draw_rect().w/2,24};
-        SDL_RenderCopy(sdl_renderer,round_start_timer.texture,NULL,&round_start_timer.get_draw_rect());        
+        SDL_Rect st_timer_rect = round_start_timer.get_draw_rect();
+        SDL_RenderCopy(sdl_renderer,round_start_timer.texture,NULL,&st_timer_rect);
     } else if (gs.round_state == ROUND_PLAYING && gs.bomb_planted) {
         double time_until_detonation = (gs.bomb_planted_tick+(BOMB_TIME_TO_DETONATE*60) - gs.tick) * (1.0/60.0);
         std::string timer_str=std::to_string((int)ceil(time_until_detonation));
@@ -795,7 +792,8 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         detonation_timer = generate_text(sdl_renderer,m5x7,timer_str,{255,0,0,255});
         detonation_timer.scale = scale;
         detonation_timer.position = {1280/2-detonation_timer.get_draw_rect().w/2,24};
-        SDL_RenderCopy(sdl_renderer,detonation_timer.texture,NULL,&detonation_timer.get_draw_rect());
+        SDL_Rect dt_timer_rect = detonation_timer.get_draw_rect();
+        SDL_RenderCopy(sdl_renderer,detonation_timer.texture,NULL,&dt_timer_rect);
     }
     
     /*
@@ -837,7 +835,8 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
     SDL_RenderClear(sdl_renderer);
     SDL_Rect dest = {0,0,1280,720};
     SDL_RenderCopy(sdl_renderer,textures[PREGAME_TEXTURE],NULL,&dest);
-    SDL_RenderCopy(sdl_renderer,connection_text.texture,NULL,&connection_text.get_draw_rect());
+    SDL_Rect connection_rect = connection_text.get_draw_rect();
+    SDL_RenderCopy(sdl_renderer,connection_text.texture,NULL,&connection_rect);
 
     if (gms.counting_down_to_game_start) {
         std::string str = std::to_string(time_to_start);
@@ -848,7 +847,8 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
         generic_drawable countdown_clock = generate_text(sdl_renderer,m5x7,str,{255,240,40});
         countdown_clock.scale = {4,4};
         countdown_clock.position = {1280/2-countdown_clock.get_draw_rect().w/2,480};
-        SDL_RenderCopy(sdl_renderer,countdown_clock.texture,NULL,&countdown_clock.get_draw_rect());
+        SDL_Rect countdown_rect = countdown_clock.get_draw_rect();
+        SDL_RenderCopy(sdl_renderer,countdown_clock.texture,NULL,&countdown_rect);
     }
 }
 
@@ -857,7 +857,6 @@ void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int s
     for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
         if (c.snapshots[ind].gms.tick<=start_tick) {
             gst = c.snapshots[ind].gms;
-            //memcpy(&gst.transient_data_begin,c.snapshots[ind].transient_data,game_state_transient_data_size);
             return;
         }
     }
@@ -873,7 +872,6 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
         if (overwrite_snapshots) {
             for (snapshot_t &snap: c.snapshots) {
                 if (snap.gms.tick==gst.tick) {
-                    //memcpy(snap.transient_data,gst.transient_data_begin,game_state_transient_data_size);
                     snap.gms = gst;
                     break;
                 }
