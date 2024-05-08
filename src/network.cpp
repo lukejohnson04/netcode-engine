@@ -24,11 +24,14 @@ enum PACKET_TYPE {
     SNAPSHOT_PERSIST_DATA,
     INFO_DUMP_ON_CONNECTED,
 
+    CHAT_MESSAGE,
+
     COMMAND_CALLBACK_INFO,
 
     NEW_CLIENT_CONNECTED,
     GAME_START_ANNOUNCEMENT,
     GMS_CHANGE,
+    LOAD_MAP,
     END_ROUND
 };
 
@@ -66,9 +69,17 @@ struct packet_t {
             i32 client_count=0;
         } info_dump_on_connected;
 
-        LARGE_INTEGER game_start_time;
+        struct {
+            LARGE_INTEGER start_time;
+            i32 map_id;
+        } game_start_info;
         
         overall_game_manager gms;
+
+        struct {
+            char name[MAX_USERNAME_LENGTH];
+            char message[MAX_CHAT_MESSAGE_LENGTH];
+        } chat_message;
 
         struct {
             i32 count;

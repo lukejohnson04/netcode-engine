@@ -24,6 +24,7 @@
 #include <iostream>
 
 #define DEFAULT_PORT 51516
+//#define RELEASE_BUILD
 #define DEFAULT_IP "127.0.0.1"
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
@@ -41,8 +42,37 @@
 #include "text.cpp"
 #include "input.cpp"
 
+
+#define MAX_MAP_SIZE 32
+
+#ifdef RELEASE_BUILD
+#define BUYTIME_LENGTH 10
+#define DEFUSE_TIME 8
+#define DEFUSE_TIME_WITH_KIT 4
+#define ROUND_ENDTIME_LENGTH 6
+#else
+#define BUYTIME_LENGTH 1
+#define DEFUSE_TIME 8
+#define DEFUSE_TIME_WITH_KIT 4
+#define ROUND_ENDTIME_LENGTH 6
+#endif
+
+#define FIRST_ROUND_START_MONEY 800
+#define BOMB_TIME_TO_DETONATE 30
+#define BOMB_RADIUS 1000
+#define BOMB_KILL_RADIUS 350
+
+#define BOMB_PLANT_TIME 3.75
+#define BOMB_COUNTDOWN_STARTTIME_BEEPS_PER_SECOND 0.5
+#define BOMB_COUNTDOWN_ENDTIME_BEEPS_PER_SECOND 3.0
+
+
+
 #include "entity.cpp"
 #include "player.cpp"
+
+#define MAX_PLAYERS 16
+#define MAX_CLIENTS 16
 
 #include "gamestate.cpp"
 #include "network.cpp"
@@ -93,6 +123,7 @@ static void GameGUIStart() {
 
     // SDL_RENDERER_PRESENTVSYNC | 
     sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    shitty_renderer_singleton=sdl_renderer;
     if (sdl_renderer == nullptr) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         return;
@@ -134,10 +165,17 @@ static void GameGUIStart() {
         generic_drawable ability_sprites[4];
         generic_drawable ability_ui_box;
         generic_drawable magazine_cnt_text;
+        generic_drawable money_text;
     } gui_elements;
     gui_elements.health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
+    gui_elements.health_text.scale = {4,4};
     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
     gui_elements.ability_ui_box.texture = textures[TexType::UI_TEXTURE];
+
+    
+    gui_elements.money_text = generate_text(sdl_renderer,m5x7,"$800",{0,255,100,255});
+    gui_elements.money_text.scale = {4,4};
+    gui_elements.money_text.position = {16,16};
     
     for (i32 ind=0;ind<4;ind++) {
         generic_drawable &sprite=gui_elements.ability_sprites[ind];
@@ -152,6 +190,8 @@ static void GameGUIStart() {
 
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
+    printf("transient size: %d\n",game_state_transient_data_size);
+    printf("permanent size: %d\n",game_state_permanent_data_size);
 
     
     while (running) {
@@ -162,13 +202,14 @@ static void GameGUIStart() {
             player = &gs.players[client_st.client_id];
         }
 
-        if (client_st.gms.state == GMS::ROUND_PLAYING) {
+        if (client_st.gms.state == GMS::GAME_PLAYING) {
             i32 prev_wall_count=gs.wall_count;
             update_player_controller(player,target_tick,&game_camera);
             
             // load a snapshot from 100ms ago            
             bool update_health_display=false;
             int p_health_before_update = player ? player->health : 0;
+            int p_money_before_update = player ? gs.money[player->id] : 0;
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
@@ -191,19 +232,35 @@ static void GameGUIStart() {
                 // load the last snapshot we had an input processed on
                 std::sort(snapshots.begin(),snapshots.end(),[](auto&left,auto&right) {
                     return left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
+                    });
+                /*
+                std::sort(snapshots.begin(),snapshots.end(),[](auto&left,auto&right) {
+                    return left.gms.tick < right.gms.tick;
                 });
+
+                for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
+                    if (snap->gms.tick < target_tick) {
+                        gs = snap->gms;
+                        break;
+                    }
+                }
+                */
+                gs = snapshots.back().gms;
+                //load_snapshot(&gs,&snapshots.back());
                 
-                i32 last_tick_processed = snapshots.back().last_processed_command_tick[client_st.client_id];
+                //i32 last_tick_processed = snapshots.back().last_processed_command_tick[client_st.client_id];
                 // find the snapshot before the target tick with the most recently processed client commands
+                /*
                 for (auto &snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
                     if (snap->gms.tick <= last_tick_processed) {
                         gs = snap->gms;
                         break;
                     }
                 }
+                */
                 
         snapshot_merge_finish:
-                for (auto &snap=snapshots.begin();snap<snapshots.end();snap++) {
+                for (auto snap=snapshots.begin();snap<snapshots.end();snap++) {
                     if (snap->gms.tick < target_tick - 180) {
                         snap = snapshots.erase(snap);
                         snap--;
@@ -218,7 +275,30 @@ static void GameGUIStart() {
                 gs.update(client_st.NetState,tick_delta);
                 gs.tick++;
             }
+            
+            if (gs.bomb_planted && target_tick >= gs.bomb_planted_tick && target_tick < gs.bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
+                client_st.bomb_tick_timer -= (target_tick - o_num) * tick_delta;
+                if (client_st.bomb_tick_timer <= 0) {
+                    play_sfx(SfxType::BOMB_BEEP_SFX);
+                    double percentage_of_bomb_left = 1.0 - ((double)(target_tick-gs.bomb_planted_tick)/(double)(BOMB_TIME_TO_DETONATE*60));
+                    double time_to_next = 0.1 + 1.0 * percentage_of_bomb_left;
+                    time_to_next = MAX(time_to_next,0.15);
+                    
+                    client_st.bomb_tick_timer += time_to_next;
+                }
+            }
 
+            for (i32 ind=0; ind<6;ind++) {
+                if (input.just_pressed[SDL_SCANCODE_5+ind]) {
+                    queue_sound((SfxType)((i32)SfxType::VO_FAVORABLE+ind),client_st.client_id,target_tick);
+                }
+            }
+
+            if (input.just_pressed[SDL_SCANCODE_MINUS]) {
+                queue_sound(SfxType::VO_IM_GOING_TO_KILL_THEM,client_st.client_id,target_tick);
+            } if (input.just_pressed[SDL_SCANCODE_EQUALS]) {
+                queue_sound(SfxType::VO_UM_ITS_CLOBBER_TIME,client_st.client_id,target_tick);
+            }
             
             // interpolate
             // TODO: there's a delay when you punch another player
@@ -232,10 +312,10 @@ static void GameGUIStart() {
             if (client_st.NetState.snapshots.size() > 0) {
                 int interp_tick = target_tick-client_st.NetState.interp_delay;
                 int old_interp_tick = o_num-client_st.NetState.interp_delay;
-                game_state *prev_snap=nullptr;
-                game_state *next_snap=nullptr;
-                game_state *exac_snap=nullptr;
-
+                snapshot_t *prev_snap=nullptr;
+                snapshot_t *next_snap=nullptr;
+                snapshot_t *exac_snap=nullptr;
+                
                 if (client_st.NetState.snapshots.back().gms.tick < interp_tick) {
                     printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,client_st.NetState.snapshots.back().gms.tick);
                 }
@@ -245,15 +325,15 @@ static void GameGUIStart() {
 
                 // this whole process of finding interp snapshots only needs to be done once for all players btw
                 for (i32 ind=(i32)client_st.NetState.snapshots.size()-1;ind>=0;ind--){
-                    game_state &snap = client_st.NetState.snapshots[ind].gms;
+                    snapshot_t &snap = client_st.NetState.snapshots[ind];
                 
-                    if (snap.tick == interp_tick) {
+                    if (snap.gms.tick == interp_tick) {
                         exac_snap=&snap;
                         break;
-                    } else if (snap.tick>interp_tick) {
+                    } else if (snap.gms.tick>interp_tick) {
                         next_snap = &snap;
                 
-                    } else if (snap.tick<interp_tick) {
+                    } else if (snap.gms.tick<interp_tick) {
                         prev_snap = &snap;
                         break;
                     }
@@ -270,11 +350,11 @@ static void GameGUIStart() {
                         }
 
                         if (exac_snap) {
-                            chara->pos = exac_snap->players[chara->id].pos;
+                            chara->pos = exac_snap->gms.players[chara->id].pos;
                         } else if (next_snap && prev_snap) {
-                            v2 prev_pos = prev_snap->players[player->id].pos;
-                            v2 next_pos = next_snap->players[player->id].pos;
-                            float f = (float)(interp_tick-prev_snap->tick) / (float)(next_snap->tick-prev_snap->tick);
+                            v2 prev_pos = prev_snap->gms.players[player->id].pos;
+                            v2 next_pos = next_snap->gms.players[player->id].pos;
+                            float f = (float)(interp_tick-prev_snap->gms.tick) / (float)(next_snap->gms.tick-prev_snap->gms.tick);
                             player->pos = lerp(prev_pos,next_pos,f);
                         }
                     }
@@ -285,6 +365,7 @@ static void GameGUIStart() {
                     if (event->tick < target_tick - 120) {
                         event = sound_queue.erase(event);
                         event--;
+                        continue;
                     }
                     // dont play a command twice
                     if (event->played) continue;
@@ -292,7 +373,7 @@ static void GameGUIStart() {
                     if (event->id != client_st.client_id) {
                         t -= client_st.NetState.interp_delay;
                     }
-                    if (t < target_tick) {
+                    if (t <= target_tick) {
                         play_sfx(event->type);
                         event->played=true;
                     }
@@ -303,6 +384,7 @@ static void GameGUIStart() {
             if (player) {
                 if (player->health != p_health_before_update) {
                     gui_elements.health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
+                    gui_elements.health_text.scale = {4,4};
                     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
                 } if (player->reloading) {
                     std::string reload_str = std::to_string(player->reload_timer);
@@ -312,6 +394,12 @@ static void GameGUIStart() {
                     gui_elements.reload_text = generate_text(sdl_renderer,m5x7,reload_str,{255,0,0,255});
                     gui_elements.reload_text.position = player->pos + v2i(16-8,48);
                     gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
+                }
+                // draw money
+                if (gs.money[player->id] != p_money_before_update) {
+                    gui_elements.money_text = generate_text(sdl_renderer,m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
+                    gui_elements.money_text.scale = {4,4};
+                    gui_elements.money_text.position = {16,16};
                 }
             }
 
@@ -323,7 +411,9 @@ static void GameGUIStart() {
                 }
             }
 
-            if (prev_wall_count != gs.wall_count) {
+            
+            if (client_st.loaded_new_map) {
+                client_st.loaded_new_map=false;
                 // regenerate raycast points
                 auto &rps = client_sided_render_geometry.raycast_points;
                 rps.clear();
@@ -406,16 +496,16 @@ static void GameGUIStart() {
                 printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
 
-            
-
             if (player) {
                 game_camera.follow = player;
-                //game_camera.pos = game_camera.follow->pos;
+                game_camera.pos = game_camera.follow->pos;
+            } else {
+                game_camera.pos = {1280/2,720/2};
             }
-            game_camera.pos = {1280/2,720/2};
             render_game_state(sdl_renderer,player,&game_camera);
             // gui
             SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&gui_elements.health_text.get_draw_rect());
+            SDL_RenderCopy(sdl_renderer,gui_elements.money_text.texture,NULL,&gui_elements.money_text.get_draw_rect());
             if (player) {
                 if (player->reloading) {
                     SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&gui_elements.reload_text.get_draw_rect());
@@ -473,6 +563,88 @@ static void GameGUIStart() {
                     gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
                 }
                 SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&gui_elements.magazine_cnt_text.get_draw_rect());
+            }
+
+            // buy menu
+            if (gs.round_state == ROUND_BUYTIME) {
+                local_persist bool is_buy_menu_open = false;
+                if (input.just_pressed[SDL_SCANCODE_B]) {
+                    is_buy_menu_open = !is_buy_menu_open;
+                } if (is_buy_menu_open) {
+                    i32 width = 800;
+                    i32 height = 620;
+                    SDL_Rect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
+                    SDL_RenderCopy(sdl_renderer,textures[BUY_MENU_TEXTURE],NULL,&dest);
+                }
+            }
+
+            local_persist bool chatbox_isopen=false;
+            local_persist std::string chatbox_text="";
+            if (chatbox_isopen == false && input.just_pressed[SDL_SCANCODE_T]) {
+                chatbox_isopen = true;
+                SDL_StartTextInput();
+                input.text_input_captured=true;
+                input.input_field = &chatbox_text;
+                input.text_modified=true;
+
+            } else if (chatbox_isopen && input.just_pressed[SDL_SCANCODE_ESCAPE]) {
+                chatbox_isopen=false;
+                SDL_StopTextInput();
+                input.text_input_captured=false;
+                input.input_field = nullptr;
+            }
+
+            if (chatbox_isopen) {
+                // if you press the enter key, submit that field!
+                
+                SDL_SetRenderDrawBlendMode(sdl_renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(sdl_renderer,255,255,255,100);
+                SDL_Rect text_input_rect = {48,500+40,400,36};
+                SDL_RenderFillRect(sdl_renderer,&text_input_rect);
+
+                local_persist generic_drawable chatbox_entry;
+                if (input.text_submitted) {
+                    // send to server
+                    packet_t p = {};
+                    p.type = CHAT_MESSAGE;
+                    strcpy_s(p.data.chat_message.message,MAX_CHAT_MESSAGE_LENGTH,chatbox_text.c_str());
+                    strcpy_s(p.data.chat_message.name,MAX_USERNAME_LENGTH,client_st.username.c_str());
+                    // ought to put this in the client tick code? idk man. doesn't matter too much tho
+                    send_packet(client_st.socket,&client_st.servaddr,&p);
+                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display,sdl_renderer);
+                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display);
+
+                    //add_to_chatlog("Luke",chatbox_text,target_tick,&chatlog_display,sdl_renderer);
+                    chatbox_text="";
+                    chatbox_isopen=false;
+                    
+                    SDL_StopTextInput();
+                    input.text_submitted = false;
+                    input.text_input_captured=false;
+                    input.input_field = nullptr;
+                } else if (input.text_modified) {
+                    chatbox_entry = generate_text(sdl_renderer,m5x7,chatbox_text,{255,255,255,255});
+                    chatbox_entry.scale = {2,2};
+                    chatbox_entry.position = {text_input_rect.x + 4, text_input_rect.y + text_input_rect.h - chatbox_entry.get_draw_rect().h-4};
+                }
+
+                if (chatbox_entry.texture) {
+                    SDL_RenderCopy(sdl_renderer,chatbox_entry.texture,NULL,&chatbox_entry.get_draw_rect());
+                }
+            }
+            
+            for (i32 ind=chatlog.entry_count-1;ind>=0;ind--) {
+                i32 fade_start_tick = chatlog.tick_added[ind]+(CHAT_MESSAGE_DISPLAY_TIME*60);
+                i32 fade_end_tick = fade_start_tick + (CHAT_FADE_LEN * 60);
+                if (true || target_tick < fade_end_tick) {
+                    if (false && target_tick > fade_start_tick) {
+                        // fade out
+                        u8 a = 255 - (u8)(((double)(target_tick - fade_start_tick) / (double)(fade_end_tick - fade_start_tick)) * 255.0);
+                        //SDL_SetTextureColorMod(sdl_renderer,chatlog_display.sprites[ind].texture,255,255,255,a);
+                        SDL_SetTextureAlphaMod(chatlog_display.sprites[ind].texture,a);
+                    }
+                    SDL_RenderCopy(sdl_renderer,chatlog_display.sprites[ind].texture,NULL,&chatlog_display.sprites[ind].get_draw_rect());
+                }
             }
 
             // visualize net data
@@ -569,16 +741,6 @@ static void GameGUIStart() {
                 SDL_RenderCopy(sdl_renderer,last_proc.texture,NULL,(SDL_Rect*)&last_proc.get_draw_rect());
                 
                 
-
-                /*
-
-                v2i target_tick_p1 = {16 + graph_box_rect.w - 8,timeline_p1y - 16};
-                v2i target_tick_p2 = {16 + graph_box_rect.w - 8,timeline_p1y + 16};
-                SDL_RenderDrawLine(sdl_renderer,target_tick_p1.x,target_tick_p1.y,target_tick_p2.x,target_tick_p2.y);
-                SDL_RenderDrawLine(sdl_renderer,target_tick_p1.x+1,target_tick_p1.y,target_tick_p2.x+1,target_tick_p2.y);
-
-                v2i interp_tick_p1 = {
-                */
             }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
@@ -586,7 +748,7 @@ static void GameGUIStart() {
             if (client_st.gms.counting_down_to_game_start) {
                 if (client_st.gms.game_start_time.QuadPart - client_st.sync_timer.get_high_res_elapsed().QuadPart <= 0) {
                     // game_start
-                    client_st.gms.state = GMS::ROUND_PLAYING;
+                    client_st.gms.state = GMS::GAME_PLAYING;
                     client_st.gms.counting_down_to_game_start=false;
                     input_send_timer.Restart();
 
@@ -669,8 +831,10 @@ static void demo() {
     }
 
     SDL_Renderer* sdl_renderer;
+    
 
     sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    shitty_renderer_singleton = sdl_renderer;
     if (sdl_renderer == nullptr) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         return;

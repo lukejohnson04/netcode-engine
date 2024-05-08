@@ -2,6 +2,7 @@
 enum TexType {
     PLAYER_TEXTURE,
     BULLET_TEXTURE,
+    TILE_TEXTURE,
 
     // gui
     ITEM_TEXTURE,
@@ -9,6 +10,8 @@ enum TexType {
     STARTGAME_BUTTON_TEXTURE,
     ABILITIES_TEXTURE,
     UI_TEXTURE,
+    BUY_MENU_WEAPONS_TEXTURE,
+    BUY_MENU_TEXTURE,
 
     // metagame
     LEVEL_TEXTURE,
@@ -18,23 +21,40 @@ enum TexType {
     TEXTURE_COUNT
 };
 
-SDL_Texture *textures[TEXTURE_COUNT];
+SDL_Renderer *shitty_renderer_singleton=nullptr;
+
+SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
+
+SDL_Texture *LoadTexture(SDL_Renderer *renderer,const char* path) {
+    SDL_Texture *res = IMG_LoadTexture(renderer,path);
+    if (res == NULL) {
+        printf("ERROR: Could not load %s from file\n",path);
+    }
+    return res;
+}
 
 static void init_textures(SDL_Renderer *renderer) {
-    textures[TexType::PLAYER_TEXTURE] = IMG_LoadTexture(renderer,"res/charas.png");
-    textures[TexType::BULLET_TEXTURE] = IMG_LoadTexture(renderer,"res/bullet.png");
-    textures[TexType::PREGAME_TEXTURE] = IMG_LoadTexture(renderer,"res/pregame_screen.png");
-    textures[TexType::STARTGAME_BUTTON_TEXTURE] = IMG_LoadTexture(renderer,"res/start_game_button.png");
-    textures[TexType::LEVEL_TEXTURE] = IMG_LoadTexture(renderer,"res/levels.png");
-    textures[TexType::ABILITIES_TEXTURE] = IMG_LoadTexture(renderer,"res/abilities.png");
-    textures[TexType::UI_TEXTURE] = IMG_LoadTexture(renderer,"res/ui.png");
-
-    textures[TexType::ITEM_TEXTURE] = IMG_LoadTexture(renderer,"res/items.png");
-    
-    textures[TexType::RAYCAST_DOT_TEXTURE] = IMG_LoadTexture(renderer,"res/dot.png");
-
+    textures[TexType::PLAYER_TEXTURE] = LoadTexture(renderer,"res/charas.png");
+    textures[TexType::BULLET_TEXTURE] = LoadTexture(renderer,"res/bullet.png");
+    textures[TexType::PREGAME_TEXTURE] = LoadTexture(renderer,"res/pregame_screen.png");
+    textures[TexType::STARTGAME_BUTTON_TEXTURE] = LoadTexture(renderer,"res/start_game_button.png");
+    textures[TexType::LEVEL_TEXTURE] = LoadTexture(renderer,"res/levels.png");
+    textures[TexType::ABILITIES_TEXTURE] = LoadTexture(renderer,"res/abilities.png");
+    textures[TexType::UI_TEXTURE] = LoadTexture(renderer,"res/ui.png");
+    textures[TexType::BUY_MENU_WEAPONS_TEXTURE] = LoadTexture(renderer,"res/buy_menu_weapons.png");
+    textures[TexType::BUY_MENU_TEXTURE] = LoadTexture(renderer,"res/buy_menu.png");
+    textures[TexType::TILE_TEXTURE] = LoadTexture(renderer,"res/tiles.png");
+    textures[TexType::ITEM_TEXTURE] = LoadTexture(renderer,"res/items.png");    
+    textures[TexType::RAYCAST_DOT_TEXTURE] = LoadTexture(renderer,"res/dot.png");
     textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
+
     SDL_SetTextureBlendMode(textures[SHADOW_TEXTURE],SDL_BLENDMODE_MOD);
+
+    for(i32 ind=0;ind<TEXTURE_COUNT;ind++) {
+        if (textures[ind] == nullptr) {
+            printf("WARNING: texture with ID %d is not loaded\n",ind);
+        }
+    }
 }
 
 

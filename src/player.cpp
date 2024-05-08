@@ -5,13 +5,16 @@ enum {
     CMD_RIGHT,
     CMD_UP,
     CMD_DOWN,
-
     CMD_PUNCH,
+    
+    CMD_BUY,
+    
     // shoot is bullet
     CMD_SHOOT,
     CMD_RELOAD,
 
     CMD_PLANT,
+    CMD_DEFUSE,
 
     // special abilities
     CMD_FIREBURST,
@@ -43,6 +46,7 @@ struct command_t {
         entity_id obj_id;
         float rot;
         i32 damage;
+        i32 purchase;
     } props;
 };
 
@@ -83,6 +87,13 @@ double shield_cooldown_length=6.0;
 double invisibility_cooldown_length=12.0;
 double fireburst_cooldown_length = 8.0;
 
+enum TEAM {
+    TERRORIST,
+    COUNTER_TERRORIST,
+    TEAM_COUNT,
+    SPECTATOR
+};
+
 struct character {
     v2 pos;
     v2 vel;
@@ -110,17 +121,21 @@ struct character {
     double invisibility_cooldown=0.0;
     double shield_cooldown=0.0;
     double fireburst_cooldown=0.0;
+    double defuse_timer = 0.0;
 
     enum {
         IDLE,
+        MOVING,
         PUNCHING,
         TAKING_DAMAGE,
         DEAD,
-        FIREBURSTING,
         SHIELD,
         PLANTING,
+        DEFUSING,
         CHARACTER_STATE_COUNT
     } curr_state=IDLE;
+
+    TEAM team=SPECTATOR;
 
     union {
         double timer=0.0;
@@ -153,7 +168,7 @@ int process_command(character *player, command_t cmd) {
     if (player->curr_state == character::DEAD) return 0;
     
     if (cmd.code == CMD_PUNCH) {
-        player->state.timer = 0.25;
+        player->state.timer = 0.2;
         player->curr_state = character::PUNCHING;
     } else if (cmd.code == CMD_SHOOT) {
         add_bullet(player->pos+v2(16,16), cmd.props.rot, player->id);
@@ -200,12 +215,18 @@ int process_command(character *player, command_t cmd) {
     } else if (cmd.code == CMD_FIREBURST) {
         return 0;
     } else {
-        player->command_state[cmd.code] = cmd.press;
         if (cmd.code == CMD_PLANT) {
+            if (player->team != TERRORIST) return 0;
+            if (cmd.press == false) {
+                player->curr_state = character::IDLE;
+            }
+        } else if (cmd.code == CMD_DEFUSE) {
+            if (player->team != COUNTER_TERRORIST) return 0;
             if (cmd.press == false) {
                 player->curr_state = character::IDLE;
             }
         }
+        player->command_state[cmd.code] = cmd.press;
     }
     return 1;
 }
@@ -249,21 +270,32 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
         new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
     } if (input.just_pressed[SDL_SCANCODE_R]) {
         new_commands[cmd_count++] = {CMD_RELOAD,true,tick,player->id};
-    } if (input.just_pressed[SDL_SCANCODE_F]) {
+    }
+
+    /*
+    if (input.just_pressed[SDL_SCANCODE_F]) {
         new_commands[cmd_count++] = {CMD_INVISIBLE,true,tick,player->id};
     }
+    */
 
     if (input.just_pressed[SDL_SCANCODE_4]) {
         new_commands[cmd_count++] = {CMD_PLANT,true,tick,player->id};
     } else if (input.just_released[SDL_SCANCODE_4]) {
         new_commands[cmd_count++] = {CMD_PLANT,false,tick,player->id};
     }
+    if (input.just_pressed[SDL_SCANCODE_E]) {
+        new_commands[cmd_count++] = {CMD_DEFUSE,true,tick,player->id};
+    } else if (input.just_released[SDL_SCANCODE_E]) {
+        new_commands[cmd_count++] = {CMD_DEFUSE,false,tick,player->id};
+    }
 
+    /*
     if (input.just_pressed[SDL_SCANCODE_LCTRL]) {
         new_commands[cmd_count++] = {CMD_SHIELD,true,tick,player->id};
     } if (input.just_pressed[SDL_SCANCODE_Q]) {
         new_commands[cmd_count++] = {CMD_FIREBURST,true,tick,player->id};
     }
+    */
 
     for (u32 id=0; id < cmd_count; id++) {
         add_command_to_recent_commands(new_commands[id]);
@@ -271,10 +303,10 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
 }
 
 internal void on_bomb_plant_finished(entity_id id, i32 tick);
-
+internal void on_bomb_defuse_finished(entity_id id, i32 tick);
 
 // passing tick as a param is dangerous!! ruh roh!!!
-void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players, i32 bombsite_count, v2i *bombsite, i32 tick, bool bomb_planted) {
+void update_player(character *player, double delta, i32 wall_count, v2i *walls, i32 player_count, character* players, i32 bombsite_count, v2i *bombsite, i32 tick, bool bomb_planted, v2i bomb_plant_location) {
     if (player->curr_state == character::DEAD) {
         return;
     }
@@ -298,6 +330,13 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         }
     } else {
         player->target_vel = {0,0};
+    }
+
+    if (player->target_vel == v2(0,0) && player->curr_state == character::MOVING) {
+        player->curr_state = character::IDLE;
+    } else if (player->target_vel != v2(0,0) && player->curr_state == character::IDLE) {
+        player->curr_state = character::MOVING;
+        player->animation_timer = 0.25;
     }
     
     if (player->target_vel.x == 0) {
@@ -378,12 +417,12 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     if (!bomb_planted && player->curr_state == character::IDLE && player->command_state[CMD_PLANT]) {
         FORn(bombsite,bombsite_count,bs) {
             fRect b_hitbox = {bs->x*64.f,bs->y*64.f,64.f,64.f};
-            fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+            fRect p_hitbox = {player->pos.x+24,player->pos.y+32,16.f,24.f};
             if (rects_collide(p_hitbox,b_hitbox)) {
                 // this is gonna have some fucked effects lol
                 player->vel = {0,0};
                 player->curr_state = character::PLANTING;
-                player->plant_timer = 3.75;
+                player->plant_timer = BOMB_PLANT_TIME;
 
                 queue_sound(SfxType::PLANT_SFX,player->id,tick);
                 // START PLANTING
@@ -392,6 +431,27 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         }
     }
 
+    // TODO: make sure releasing defuse stops defusing, same with releasing bomb plant
+    if (bomb_planted && player->curr_state == character::IDLE && player->command_state[CMD_DEFUSE]) {
+        iRect b_hitbox = {bomb_plant_location.x-10,bomb_plant_location.y-10,20,20};
+        fRect p_hitbox = {player->pos.x+20,player->pos.y+20,24.f,32.f};
+        if (rects_collide(b_hitbox,p_hitbox)) {
+            player->vel = {0,0};
+            player->curr_state = character::DEFUSING;
+
+            bool has_kit=false;
+            player->defuse_timer = has_kit ? DEFUSE_TIME : DEFUSE_TIME_WITH_KIT;
+            queue_sound(SfxType::BOMB_DEFUSE_SFX,player->id,tick);
+        }
+    }
+
+    if (player->curr_state == character::MOVING) {
+        player->animation_timer -= delta;
+        if (player->animation_timer <= 0) {
+            player->animation_timer += 0.2;
+        }
+    }
+    
     // anim
     if (player->state.timer) {
         player->state.timer -= delta;
@@ -430,10 +490,15 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
             // this should likely be authoritative
             on_bomb_plant_finished(player->id,tick);
         }
+    } if (player->curr_state == character::DEFUSING) {
+        player->defuse_timer -= delta;
+        if (player-> defuse_timer <= 0) {
+            player->curr_state = character::IDLE;
+            on_bomb_defuse_finished(player->id,tick);
+        }
     }
+
     player->invisibility_cooldown-=delta;
     player->shield_cooldown-=delta;
     player->fireburst_cooldown-=delta;
 }
-
-

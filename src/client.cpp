@@ -6,6 +6,9 @@ struct client_t {
 
     double ping=0;
     int last_tick_processed=0;
+    int last_command_processed_by_server=0;
+    i32 last_bomb_tick=0;
+    double bomb_tick_timer=1.0;
 
     timer_t sync_timer;
     netstate_info_t NetState;
@@ -30,6 +33,10 @@ struct client_t {
         next_tick_time.QuadPart = gms.game_start_time.QuadPart + (next_tick*sync_timer.frequency.QuadPart/60);
         return static_cast<double>(next_tick_time.QuadPart-sync_timer.get_high_res_elapsed().QuadPart)/sync_timer.frequency.QuadPart;
     }
+
+    std::string username="";
+
+    bool loaded_new_map=false;
 
     // mutex
     HANDLE _mt_merge_snapshots;
@@ -65,22 +72,42 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
                         
         } else if (pc.type == SNAPSHOT_TRANSIENT_DATA) {
             WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
-            printf("Recieved snapshot\n");
 
             client_st.merge_snapshots.push_back(pc.data.snapshot);
+            i32 proc_tick = pc.data.snapshot.last_processed_command_tick[client_st.client_id];
+            for (auto node:client_st.NetState.command_stack) {
+                if(node.cmd.tick<=proc_tick) {
+                    node.verified=true;
+                }
+            }
             client_st._new_merge_snapshot = true;
+            client_st.last_command_processed_by_server = MAX(pc.data.snapshot.last_processed_command_tick[client_st.client_id],client_st.last_command_processed_by_server);
 
             ReleaseMutex(client_st._mt_merge_snapshots);
+            
         } else if (pc.type == SNAPSHOT_PERSIST_DATA) {
             
         } else if (pc.type == COMMAND_CALLBACK_INFO) {
             for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
+                if (pc.data.command_callback_info.sounds[ind].type == SfxType::PLANT_FINISHED_SFX) {
+                    printf("Plant finished sound\n");
+                }
                 queue_sound(pc.data.command_callback_info.sounds[ind]);
             }
 
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {
-            client_st.gms.game_start_time = pc.data.game_start_time;
+            client_st.gms.game_start_time = pc.data.game_start_info.start_time;
             client_st.gms.counting_down_to_game_start=true;
+            // full gs mutex
+            load_permanent_data_from_map(pc.data.game_start_info.map_id);
+            client_st.loaded_new_map=true;
+        } else if (pc.type == CHAT_MESSAGE) {
+            printf("Received chat message from the server\n");
+            std::string name(pc.data.chat_message.name);
+            std::string message(pc.data.chat_message.message);
+            std::cout << name << ": " << message << std::endl;
+            
+            add_to_chatlog(name,message,client_st.last_tick_processed,&chatlog_display);
 
         } else {
             // this gets called when it times out each time from no packet recieved
@@ -110,14 +137,11 @@ static void client_connect(int port,std::string ip_addr) {
     servaddr.sin_port = htons((short) port);
     servaddr.sin_addr.s_addr = inet_addr(ip_addr.c_str());
 
+#ifdef RELEASE_BUILD
+    std::cout << "Please enter your username: ";
+    std::cin >> client_st.username;
+#endif
 
-    /*
-    struct timeval send_tv,rec_tv;
-    send_tv.tv_sec = 20000;
-    rec_tv.tv_sec = 20000;
-    setsockopt(connect_socket,SOL_SOCKET,SO_SNDTIMEO,(char*)&send_tv,sizeof(send_tv));
-    setsockopt(connect_socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&rec_tv,sizeof(rec_tv));
-    */
     printf("Attempting connection on port %d to ip %s\n",port,ip_addr.c_str());
 
     // connection request
@@ -188,6 +212,10 @@ static void client_connect(int port,std::string ip_addr) {
 
     client_st._mt_merge_snapshots = CreateMutex(NULL,FALSE,NULL);
 
+#ifndef RELEASE_BUILD
+    client_st.username = "Player"+std::to_string(client_st.client_id);
+#endif
+
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ClientListen, (LPVOID)&connect_socket, 0, &ThreadID);
     GameGUIStart();
@@ -205,7 +233,7 @@ static void client_send_input(int curr_tick) {
     i32 end_tick = curr_tick;
     p.data.command_data.count=0;
     
-    for (auto &node=client_st.NetState.command_stack.begin();node<client_st.NetState.command_stack.end();node++) {
+    for (auto node=client_st.NetState.command_stack.begin();node<client_st.NetState.command_stack.end();node++) {
         if (node->cmd.tick < start_tick) {
             if (node->cmd.tick < end_tick - 120) {
                 node = client_st.NetState.command_stack.erase(node);

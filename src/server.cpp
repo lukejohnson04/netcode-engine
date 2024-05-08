@@ -1,7 +1,4 @@
 
-
-#define MAX_CLIENTS 256
-
 struct server_client_t {
     sockaddr_in addr;
     i64 connection_time;
@@ -140,7 +137,20 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
             gl_server.last_proc_command_buffer[client_id] = MAX(gl_server.last_proc_command_buffer[client_id],MAX(gl_server.s_clients[client_id].last_processed_command,p.data.command_data.end_tick));
             
             ReleaseMutex(gl_server._mt_merge_commands);
+
+        } else if (p.type == CHAT_MESSAGE) {
+            printf("Received a chat message from the client\n");
+            // NOTE: the client shall send chat messages until the client recieves
+            // a message broadcast from the server that matches the message.
+            // NOTE: the server shall send chat messages to each client until the
+            // client sends back a packet confirming the message was recieved
+            std::string name(p.data.chat_message.name);
+            std::string message(p.data.chat_message.message);
+            
+            add_to_chatlog(name,message,gl_server.last_tick);
+            broadcast(&p);
         }
+
     }
     return 0;
 }
@@ -267,17 +277,20 @@ static void server(int port) {
 
     // TODO:
     // lower snapshot rate significantly
+
+    entity_id spectate_player=ID_DONT_EXIST;
+    camera_t game_camera;    
     
     // tick thread
     while (running) {
-        PollEvents(&input,&running);
         bool new_frame_ready=false;
 
-        if (gl_server.gms.state == GMS::ROUND_PLAYING) {
+        if (gl_server.gms.state == GMS::GAME_PLAYING) {
             target_tick = gl_server.get_target_tick();
             gl_server.last_tick=target_tick;
 
             if (snap_clock.get() > snap_delta) {
+                PollEvents(&input,&running);
                 snap_clock.Restart();
                 // merge command mutex
                 DWORD do_merge_commands = WaitForSingleObject(gl_server._mt_merge_commands,0);
@@ -310,6 +323,12 @@ static void server(int port) {
                         }
                     }
                     gl_server.merge_commands.clear();
+
+                    if (earliest_new_cmd_tick!=-1) {
+                        i32 tick_before=gs.tick;
+                        find_and_load_gamestate_snapshot(gs,gl_server.NetState,earliest_new_cmd_tick);
+                        load_game_state_up_to_tick(gs,gl_server.NetState,tick_before);
+                    }
                     
             command_merge_finish:
                     ReleaseMutex(gl_server._mt_merge_commands);
@@ -317,44 +336,106 @@ static void server(int port) {
                 
                 load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
 
-                if (target_tick-snapshot_buffer > 0) {
+                if (target_tick-snapshot_buffer >= 0) {
+                    snapshot_t snap = {};
+                    snap.gms = gs;
+                    //memcpy(snap.transient_data,gs.transient_data_begin,game_state_transient_data_size);
+                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                        snap.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                    }
+                    gl_server.NetState.snapshots.push_back(snap);
+
+                    for (i32 client_id=0;client_id<(i32)gl_server.client_count;client_id++) {
+                        // send each client a personalized snapshot that matches up to the last command received from them
+                        packet_t p = {};
+                        p.type = SNAPSHOT_TRANSIENT_DATA;
+                        
+                        i32 update_tick = gl_server.s_clients[client_id].last_processed_command - snapshot_buffer;
+                        if (update_tick<0) continue;
+
+                        if (update_tick<target_tick) {
+                            find_and_load_gamestate_snapshot(p.data.snapshot.gms,gl_server.NetState,update_tick);
+                        }
+                        load_game_state_up_to_tick(p.data.snapshot.gms,gl_server.NetState,update_tick,false);
+
+                        //memcpy(p.data.snapshot.transient_data,gs.transient_data_begin,game_state_transient_data_size);
+                        p.data.snapshot.last_processed_command_tick[client_id] = update_tick;
+                        send_packet(gl_server.socket,&gl_server.clients[client_id],&p);
+
+                        // last processed command data
+                        //for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
+                        //    p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                        //}
+                    }
+                    //printf("%d processed commands\n",(i32)gl_server.NetState.command_stack.size());
+
+                    /*
                     // NOTE: add snapshot
                     packet_t p = {};
                     p.type = SNAPSHOT_TRANSIENT_DATA;
                     p.data.snapshot.gms = gs;
                     // last processed command data
                     for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                        p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
+                    p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
                     }
 
                     broadcast(&p);
+                    */
                     
                     // send the last 6 ticks worth of snapshots
                     // that way the server doesn't need to buffer any snapshots, and the client just overwrites
                     // the latest snapshots they have with the one from the server
 
-                    if (gl_server.NetState.snapshots.size() > snapshot_buffer) {
-
-                        // send important command data
-                        p = {};
-                        p.type = COMMAND_CALLBACK_INFO;
-                        p.data.command_callback_info.count = 0;
-                        for(i32 ind=0;ind<(i32)sound_queue.size();ind++){
-                            sound_event event = sound_queue[ind];
-                            if (event.tick<(target_tick-snapshot_buffer)-60) {
-                                sound_queue.erase(sound_queue.begin()+ind);
-                                ind--;
-                                continue;
-                            }
-                            p.data.command_callback_info.sounds[p.data.command_callback_info.count++] = event;
+                    // send important command data
+                    packet_t p = {};
+                    p.type = COMMAND_CALLBACK_INFO;
+                    p.data.command_callback_info.count = 0;
+                    for(i32 ind=0;ind<(i32)sound_queue.size();ind++){
+                        sound_event event = sound_queue[ind];
+                        if (event.tick<(target_tick-snapshot_buffer)-120) {
+                            sound_queue.erase(sound_queue.begin()+ind);
+                            ind--;
+                            continue;
                         }
-                        broadcast(&p);
+                        p.data.command_callback_info.sounds[p.data.command_callback_info.count++] = event;
                     }
+                    broadcast(&p);
                 }
                 new_frame_ready=true;
-                render_game_state(sdl_renderer);                
+
+                if (input.just_pressed[SDL_SCANCODE_P]) {
+                    if (spectate_player == ID_DONT_EXIST) {
+                        if (gs.player_count>0) {
+                            spectate_player = 0;
+                        }
+                    } else {
+                        spectate_player++;
+                        if (spectate_player >= gs.player_count) {
+                            spectate_player = ID_DONT_EXIST;
+                        }
+                    }
+                }
+
+                if (spectate_player != ID_DONT_EXIST) {
+                    game_camera.follow = &gs.players[spectate_player];
+                    game_camera.pos = game_camera.follow->pos;
+                } else {
+                    v2 mvec={0,0};
+                    if (input.is_pressed[SDL_SCANCODE_D]) {
+                        mvec.x = 5;
+                    } if (input.is_pressed[SDL_SCANCODE_A]) {
+                        mvec.x = -5;
+                    } if (input.is_pressed[SDL_SCANCODE_S]) {
+                        mvec.y = 5;
+                    } if (input.is_pressed[SDL_SCANCODE_W]) {
+                        mvec.y = -5;
+                    }
+                    game_camera.pos += mvec;
+                }
+                render_game_state(sdl_renderer,game_camera.follow,&game_camera);
             }
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
+            PollEvents(&input,&running);
             new_frame_ready=false;
             static int p_connected_last_time=0;
             if (p_connected_last_time != gl_server.gms.connected_players) {
@@ -367,8 +448,7 @@ static void server(int port) {
                 LARGE_INTEGER curr = gl_server.timer.get_high_res_elapsed();
                 if (gl_server.gms.game_start_time.QuadPart - curr.QuadPart <= 0) {
                     // game_start
-                    gl_server.gms.state = GMS::ROUND_PLAYING;
-                    load_gamestate_for_round(gl_server.gms);
+                    gamestate_load_map(gl_server.gms,MAP_DE_DUST2);
 
                     // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
@@ -397,7 +477,8 @@ static void server(int port) {
 
                     packet_t p = {};
                     p.type = GAME_START_ANNOUNCEMENT;
-                    p.data.game_start_time = gl_server.gms.game_start_time;
+                    p.data.game_start_info.start_time = gl_server.gms.game_start_time;
+                    p.data.game_start_info.map_id = MAP_DE_DUST2;
                     broadcast(&p);
                     gl_server.gms.counting_down_to_game_start=true;
                 }
@@ -415,7 +496,9 @@ endof_frame:
         // this is based on snapshots during gameplay but ticks during the menu
         // perhaps a uniform system that works regardless of gamestate is best
         // when calculating current frame times and how long to sleep
-        if (gl_server.gms.state == GMS::ROUND_PLAYING) {
+
+        // TODO: GET RID OF THIS!!! Once things are working again!!!
+        if (gl_server.gms.state == GMS::GAME_PLAYING) {
             // sleep to next tick
             double len = snap_delta - snap_clock.get() - (snap_delta / 10.0);
             if (len > 0) {
