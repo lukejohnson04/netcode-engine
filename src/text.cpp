@@ -18,14 +18,14 @@ struct chatlog_display_t {
 
 chatlog_display_t chatlog_display;
 
-void add_to_chatlog(std::string sender_name,std::string message,i32 tick,chatlog_display_t *disp=nullptr,SDL_Renderer *sdl_renderer=shitty_renderer_singleton) {
+void add_to_chatlog(std::string sender_name,std::string message,i32 tick,chatlog_display_t *disp=nullptr) {
     std::string fin_str = sender_name + ": " + message;
     chatlog.entry_count++;
     memcpy(chatlog.raw[chatlog.entry_count-1],fin_str.c_str(),fin_str.size());
     chatlog.tick_added[chatlog.entry_count-1] = tick;
 
     if (disp) {
-        disp->sprites[chatlog.entry_count-1] = generate_text(shitty_renderer_singleton,m5x7,fin_str,{0,100,255,255});
+        disp->sprites[chatlog.entry_count-1] = generate_text(m5x7,fin_str,{0,100,255,255});
         disp->sprites[chatlog.entry_count-1].scale = {2,2};
         for (i32 ind=0; ind<chatlog.entry_count;ind++) {
             i32 dist_to_first = chatlog.entry_count - ind;

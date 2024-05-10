@@ -32,6 +32,7 @@ struct map_t {
 
     i32 spawn_counts[TEAM_COUNT];
     v2i spawns[TEAM_COUNT][32];
+    bool static_texture_generated=false;
 };
 
 // should be called world state instead of game state
@@ -265,6 +266,7 @@ void load_permanent_data_from_map(i32 map) {
         }
     }
     SDL_FreeSurface(level_surface);
+    mp.static_texture_generated=false;
 }
 
 void gamestate_load_map(overall_game_manager &gms, i32 map) {
@@ -603,15 +605,58 @@ struct {
     std::vector<segment> segments;
 } client_sided_render_geometry;
 
+bool draw_shadows=true;
 
-void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr) {
+void render_game_state(character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr) {
+    glUseProgram(sh_testProgram);
+    
     // Render start
     SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
     SDL_RenderClear(sdl_renderer);
 
     v2i cam_mod = {0,0};
     if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
+    SDL_Rect map_rect = {cam_mod.x,cam_mod.y,MAX_MAP_SIZE*64,MAX_MAP_SIZE*64};
+    SDL_Rect cam_rect = {(i32)game_camera->pos.x - (1280/2),(i32)game_camera->pos.y - (720/2),1280,720};
 
+    if (mp.static_texture_generated == false) {
+        
+        SDL_SetRenderTarget(sdl_renderer,textures[STATIC_MAP_TEXTURE]);
+        SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);
+        SDL_RenderClear(sdl_renderer);
+    
+        for (i32 x=0; x<MAX_MAP_SIZE; x++) {
+            for (i32 y=0; y<MAX_MAP_SIZE; y++) {
+                i32 type = mp.tiles[x][y];
+                SDL_Rect dest = {x*64,y*64,64,64};
+                SDL_Rect src={0,0,16,16};
+                if (type == TT_GROUND) {
+                    src={16,16,16,16};
+                } else if (type == TT_WALL) {
+                    src={16,0,16,16};
+                } else if (type == TT_BOMBSITE) {
+                    src={32,0,16,16};
+                } else if (type == TT_A) {
+                    src={32,16,16,16};
+                } else if (type == TT_AA) {
+                    src={32,32,16,16};
+                } else if (type == TT_ARROW_UPLEFT) {
+                    src={48,16,16,16};
+                } else if (type == TT_ARROW_UPRIGHT) {
+                    src={48,32,16,16};
+                }
+                SDL_RenderCopy(sdl_renderer,textures[TILE_TEXTURE],&src,&dest);
+            }
+        }
+        SDL_SetRenderTarget(sdl_renderer,NULL);
+        mp.static_texture_generated=true;
+    }
+    SDL_RenderCopy(sdl_renderer,textures[STATIC_MAP_TEXTURE],NULL,&map_rect);
+    
+    // lol is this objectively horrible?? its a massive texture so its a great idea but poor execution
+    // i mean who rly cares tho!
+
+    /*
     for (i32 x=0; x<MAX_MAP_SIZE; x++) {
         for (i32 y=0; y<MAX_MAP_SIZE; y++) {
             i32 type = mp.tiles[x][y];
@@ -635,22 +680,10 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
             SDL_RenderCopy(sdl_renderer,textures[TILE_TEXTURE],&src,&dest);
         }
     }
-
-    /*
-    for (i32 ind=0; ind<gs.wall_count; ind++) {
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
-
-        SDL_Rect rect = {(int)gs.walls[ind].x*64+cam_mod.x,(int)gs.walls[ind].y*64+cam_mod.y,64,64};
-        SDL_RenderFillRect(sdl_renderer, &rect);
-    }
-
-    for (i32 ind=0; ind<gs.bombsite_count; ind++) {
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,255,255);
-
-        SDL_Rect rect = {(int)gs.bombsite[ind].x*64+cam_mod.x,(int)gs.bombsite[ind].y*64+cam_mod.y,64,64};
-        SDL_RenderFillRect(sdl_renderer, &rect);
-    }
     */
+    //SDL_SetRenderTarget(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE]);
+    //SDL_SetRenderDrawColor(sdl_renderer,0,0,0,0);
+    //SDL_RenderClear(sdl_renderer);
     
     for (i32 id=0; id<gs.player_count; id++) {
         character &p = gs.players[id];
@@ -685,13 +718,15 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         SDL_RenderCopy(sdl_renderer,textures[TexType::ITEM_TEXTURE],&rect,&dest);
     }
     
-    if (render_from_perspective_of != nullptr && client_sided_render_geometry.raycast_points.size()>0) {
+    if (render_from_perspective_of != nullptr && client_sided_render_geometry.raycast_points.size()>0 && draw_shadows) {
         const SDL_Color black = {0,0,0,255};
         const SDL_Color white = {255,255,255,255};
+        const SDL_Color invisible={0,0,0,0};
+        const u8 shadow_visibility = 80;
 
         SDL_SetRenderTarget(sdl_renderer,textures[SHADOW_TEXTURE]);
         SDL_RenderClear(sdl_renderer);
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+        SDL_SetRenderDrawColor(sdl_renderer,80,80,80,255);
         SDL_RenderFillRect(sdl_renderer,NULL);
         
         v2i p_pos = render_from_perspective_of->pos + v2(32,32);
@@ -740,7 +775,8 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         std::sort(dests.begin(),dests.end(),[](auto &left, auto &right) {
             return left.angle < right.angle;
         });
-        
+
+        SDL_SetRenderDrawBlendMode(sdl_renderer,SDL_BLENDMODE_NONE);
         for (i32 n=0;n<dests.size()+1;n++) {
             bool fin=n==dests.size();
             if (fin) n=0;
@@ -754,9 +790,15 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
             if (fin) break;
         }
 
-        SDL_SetRenderTarget(sdl_renderer,NULL);
-        SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
+        //SDL_SetRenderTarget(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE]);
+        //SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
 
+        SDL_SetRenderTarget(sdl_renderer,NULL);
+        //SDL_RenderCopy(sdl_renderer,textures[STATIC_MAP_TEXTURE],NULL,&map_rect);
+        //SDL_RenderCopy(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE],NULL,NULL);
+        //SDL_RenderCopy(sdl_renderer,textures[SHADOW_TEXTURE],NULL,NULL);
+        //SDL_RenderCopy(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE],NULL,NULL);
+        //SDL_RenderCopy(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE],NULL,NULL);
 
         /*
         for (auto &dest: dests) {
@@ -768,9 +810,12 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         }
         */
         
-        
         dests.clear();
+    } else {
+        SDL_SetRenderTarget(sdl_renderer,NULL);
+        SDL_RenderCopy(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE],NULL,NULL);
     }
+    glUseProgram(NULL);
 
     // gui elements
     if (gs.round_state == ROUND_BUYTIME) {
@@ -779,7 +824,7 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         std::string timer_str=std::to_string((int)ceil(time_until_start));;
         generic_drawable round_start_timer;
         v2 scale = {4,4};
-        round_start_timer = generate_text(sdl_renderer,m5x7,timer_str,{255,0,0,255});
+        round_start_timer = generate_text(m5x7,timer_str,{255,0,0,255});
         round_start_timer.scale = scale;
         round_start_timer.position = {1280/2-round_start_timer.get_draw_rect().w/2,24};
         SDL_Rect st_timer_rect = round_start_timer.get_draw_rect();
@@ -789,7 +834,7 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
         std::string timer_str=std::to_string((int)ceil(time_until_detonation));
         generic_drawable detonation_timer;
         v2 scale = {4,4};
-        detonation_timer = generate_text(sdl_renderer,m5x7,timer_str,{255,0,0,255});
+        detonation_timer = generate_text(m5x7,timer_str,{255,0,0,255});
         detonation_timer.scale = scale;
         detonation_timer.position = {1280/2-detonation_timer.get_draw_rect().w/2,24};
         SDL_Rect dt_timer_rect = detonation_timer.get_draw_rect();
@@ -819,13 +864,13 @@ void render_game_state(SDL_Renderer *sdl_renderer, character *render_from_perspe
 
 }
 
-void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms, double time_to_start) {
+void render_pregame_screen(overall_game_manager &gms, double time_to_start) {
     static int connected_last_tick=-1;
-    static generic_drawable connection_text = generate_text(sdl_renderer,m5x7,"Players connected (" + std::to_string(connected_last_tick) + "/2)",{255,255,200});
+    static generic_drawable connection_text = generate_text(m5x7,"Players connected (" + std::to_string(connected_last_tick) + "/2)",{255,255,200});
     connection_text.scale = {2,2};
     
     if (connected_last_tick != gms.connected_players) {
-        connection_text = generate_text(sdl_renderer,m5x7,"Players connected (" + std::to_string(gms.connected_players)+"/2)",{255,255,200});
+        connection_text = generate_text(m5x7,"Players connected (" + std::to_string(gms.connected_players)+"/2)",{255,255,200});
         connected_last_tick=gms.connected_players;
         connection_text.scale = {2,2};
         connection_text.position = {1280/2-connection_text.get_draw_rect().w/2,380};
@@ -844,7 +889,7 @@ void render_pregame_screen(SDL_Renderer *sdl_renderer, overall_game_manager &gms
             str.erase(str.begin()+4,str.end());
         }
         
-        generic_drawable countdown_clock = generate_text(sdl_renderer,m5x7,str,{255,240,40});
+        generic_drawable countdown_clock = generate_text(m5x7,str,{255,240,40});
         countdown_clock.scale = {4,4};
         countdown_clock.position = {1280/2-countdown_clock.get_draw_rect().w/2,480};
         SDL_Rect countdown_rect = countdown_clock.get_draw_rect();
@@ -879,7 +924,6 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
         }
         gst.update(c,1.0/60.0);
         gst.tick++;
-
     }
 }
 

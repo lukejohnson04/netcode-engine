@@ -217,37 +217,7 @@ static void server(int port) {
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
 
-    SDL_Window *window=nullptr;
-    SDL_Surface *screenSurface = nullptr;
-
-    if (TTF_Init() != 0) {
-        printf("Error: %s\n", TTF_GetError()); 
-        return;
-    }
-
-    if (IMG_Init(IMG_INIT_PNG) == 0) {
-        printf("Error: %s\n", IMG_GetError());
-        return;
-    }
-
-    window = SDL_CreateWindow("Main",
-                              SDL_WINDOWPOS_UNDEFINED,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              1280,
-                              720,
-                              SDL_WINDOW_SHOWN);
-
-    if (window == nullptr) {
-        printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
-    }
-
-    SDL_Renderer* sdl_renderer;
-
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (sdl_renderer == nullptr) {
-        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
-        return;
-    }
+    initialize_systems("server",false);
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
@@ -464,7 +434,7 @@ static void server(int port) {
                     }
                     game_camera.pos += mvec;
                 }
-                render_game_state(sdl_renderer,game_camera.follow,&game_camera);
+                render_game_state(game_camera.follow,&game_camera);
             }
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
             PollEvents(&input,&running);
@@ -495,7 +465,7 @@ static void server(int port) {
             }
 
             if (new_frame_ready) {
-                render_pregame_screen(sdl_renderer,gl_server.gms,time_to_start);
+                render_pregame_screen(gl_server.gms,time_to_start);
             }
 
             if (!gl_server.gms.counting_down_to_game_start) {

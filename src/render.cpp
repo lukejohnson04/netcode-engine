@@ -16,14 +16,83 @@ enum TexType {
     // metagame
     LEVEL_TEXTURE,
     SHADOW_TEXTURE,
+    STATIC_MAP_TEXTURE,
     RAYCAST_DOT_TEXTURE,
+    WORLD_OBJECTS_TEXTURE,
 
     TEXTURE_COUNT
 };
 
-SDL_Renderer *shitty_renderer_singleton=nullptr;
+GLuint sh_maskProgram, sh_testProgram;
 
 SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
+
+
+std::string readShaderFile(const std::string &shaderPath) {
+    std::ifstream shaderFile;
+    std::stringstream shaderStream;
+
+    // Open file
+    shaderFile.open(shaderPath);
+    if (!shaderFile.is_open()) {
+        std::cerr << "ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ: Cannot open file " << shaderPath << std::endl;
+        return "";
+    }
+
+    // Read file's buffer contents into streams
+    shaderStream << shaderFile.rdbuf();
+    shaderFile.close(); // Close file handlers
+
+    // Convert stream into string
+    return shaderStream.str();
+}
+
+GLuint compileShader(const char* source, GLenum type) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+
+    // Check for shader compile errors
+    int success;
+    char infoLog[512];
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(shader, 512, NULL, infoLog);
+        std::cerr << "ERROR::SHADER::COMPILATION_FAILED\n" << infoLog << std::endl;
+    }
+
+    return shader;
+}
+
+GLuint createShaderProgram(const std::string& vertexPath, const std::string& fragmentPath) {
+    std::string vertexCode = readShaderFile(vertexPath);
+    std::string fragmentCode = readShaderFile(fragmentPath);
+    const char* vShaderCode = vertexCode.c_str();
+    const char* fShaderCode = fragmentCode.c_str();
+
+    // Compile shaders
+    GLuint vertexShader = compileShader(vShaderCode, GL_VERTEX_SHADER);
+    GLuint fragmentShader = compileShader(fShaderCode, GL_FRAGMENT_SHADER);
+    GLuint shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+
+    // Check for linking errors
+    int success;
+    char infoLog[512];
+    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
+        std::cerr << "ERROR::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+    }
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    return shaderProgram;
+}
+
 
 SDL_Texture *LoadTexture(SDL_Renderer *renderer,const char* path) {
     SDL_Texture *res = IMG_LoadTexture(renderer,path);
@@ -34,6 +103,9 @@ SDL_Texture *LoadTexture(SDL_Renderer *renderer,const char* path) {
 }
 
 static void init_textures(SDL_Renderer *renderer) {
+    sh_maskProgram = createShaderProgram("../src/shader.vert","../src/shader.frag");
+    sh_testProgram = createShaderProgram("../src/shader.vert","../src/test.frag");
+    
     textures[TexType::PLAYER_TEXTURE] = LoadTexture(renderer,"res/charas.png");
     textures[TexType::BULLET_TEXTURE] = LoadTexture(renderer,"res/bullet.png");
     textures[TexType::PREGAME_TEXTURE] = LoadTexture(renderer,"res/pregame_screen.png");
@@ -46,9 +118,18 @@ static void init_textures(SDL_Renderer *renderer) {
     textures[TexType::TILE_TEXTURE] = LoadTexture(renderer,"res/tiles.png");
     textures[TexType::ITEM_TEXTURE] = LoadTexture(renderer,"res/items.png");    
     textures[TexType::RAYCAST_DOT_TEXTURE] = LoadTexture(renderer,"res/dot.png");
-    textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
+    textures[TexType::WORLD_OBJECTS_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
 
+    textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
     SDL_SetTextureBlendMode(textures[SHADOW_TEXTURE],SDL_BLENDMODE_MOD);
+    SDL_SetTextureBlendMode(textures[WORLD_OBJECTS_TEXTURE],SDL_BLENDMODE_BLEND);
+
+    textures[TexType::STATIC_MAP_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,32*64,32*64);
+
+    SDL_SetRenderDrawColor(renderer,255,255,0,255);
+    SDL_SetRenderTarget(renderer,textures[TexType::STATIC_MAP_TEXTURE]);
+    SDL_RenderClear(renderer);
+    SDL_SetRenderTarget(renderer,NULL);
 
     for(i32 ind=0;ind<TEXTURE_COUNT;ind++) {
         if (textures[ind] == nullptr) {
@@ -124,7 +205,7 @@ struct generic_drawable {
     }
 };
 
-generic_drawable generate_text(SDL_Renderer *sdl_renderer,TTF_Font *font,std::string str,SDL_Color col={255,255,255,255}) {
+generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255,255,255,255}) {
     generic_drawable res;
     
     SDL_Surface* temp_surface =
@@ -140,7 +221,7 @@ generic_drawable generate_text(SDL_Renderer *sdl_renderer,TTF_Font *font,std::st
 
 TTF_Font *m5x7=nullptr;
 
-void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *sdl_renderer) {
+void render_ability_sprite(generic_drawable *sprite,double timer) {
     SDL_Rect draw_rect = sprite->get_draw_rect();
     SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&draw_rect);
     if (timer > 0) {
@@ -153,10 +234,32 @@ void render_ability_sprite(generic_drawable *sprite,double timer,SDL_Renderer *s
                 }
             }
         }
-        generic_drawable cooldown_text = generate_text(sdl_renderer,m5x7,cooldown_str,{255,0,0,0});
+        generic_drawable cooldown_text = generate_text(m5x7,cooldown_str,{255,0,0,0});
         cooldown_text.position = {sprite->position.x + 40,sprite->position.y + sprite->get_draw_rect().h - 16};
         SDL_Rect cl_draw_rect = cooldown_text.get_draw_rect();
         SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cl_draw_rect);
     }
 }
 
+
+/*
+
+GLuint compileShader(const char* source, GLenum type) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader,1,&source,NULL);
+    glCompileShader(shader);
+    return shader;
+}
+
+GLuint createShaderProgram(const char* vertexSource, const char* fragmentSource) {
+    GLuint vertexShader = compileShader(vertexSource, GL_VERTEX_SHADER);
+    GLuint fragmentShader = compileShader(fragmentSource, GL_FRAGMENT_SHADER);
+    GLuint shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+    // Check for linking errors here
+    return shaderProgram;
+}
+
+ */

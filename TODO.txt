@@ -20,3 +20,7 @@ Iterate through all points, append the angle to it along with +0.00001 and -0.00
 Iterate through all angles. Detect collision point.
 
 THEN we can either iterate through all collision points to draw triangles, OR draw triangles inline with the collision detection. This would make it O(n) instead of O(2n).
+
+TODO:
+
+Convert rendering from SDL_Renderer to OpenGL so we can use shaders

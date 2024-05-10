@@ -22,20 +22,100 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
+#include <sstream>
 
 #define DEFAULT_PORT 51516
-//#define RELEASE_BUILD
+#define RELEASE_BUILD
 #define DEFAULT_IP "127.0.0.1"
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
 #define SDL_MAIN_HANDLED
 
+#include <GL/glew.h>
+
 #include <SDL.h>
+#include <SDL_opengl.h>
 #include <SDL_ttf.h>
 #include <SDL_image.h>
 #include <SDL_mixer.h>
 
 #include "common.h"
+
+SDL_Window *window = nullptr;
+SDL_Surface *screenSurface = nullptr;
+SDL_Renderer *sdl_renderer=nullptr;
+SDL_GLContext glContext;
+
+void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true) {
+    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_VIDEO_OPENGL) < 0) {
+        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
+        return;
+    }    
+    
+    if (TTF_Init() != 0) {
+        printf("Error: %s\n", TTF_GetError()); 
+        return;
+    }
+
+    if (IMG_Init(IMG_INIT_PNG) == 0) {
+        printf("Error: %s\n", IMG_GetError());
+        return;
+    }
+
+    if( Mix_OpenAudio( 44100, MIX_DEFAULT_FORMAT, 2, 2048 ) < 0 )
+    {
+        printf( "SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError() );
+        return;
+    }
+
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);  // Use OpenGL 3.x
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);  // Version 3.3, for example
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);    
+
+    window = SDL_CreateWindow(winstr,
+                              SDL_WINDOWPOS_UNDEFINED,
+                              SDL_WINDOWPOS_UNDEFINED,
+                              1280,
+                              720,
+                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+
+    printf("Created window\n");
+
+    if (window == nullptr) {
+        printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
+    }
+
+    glContext = SDL_GL_CreateContext(window);
+
+    if (!glContext) {
+        std::cerr << "Failed to create OpenGL context: " << SDL_GetError() << std::endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+    }
+
+    SDL_GL_MakeCurrent(window, glContext);
+
+    glewInit();
+
+    if (init_renderer) {
+        int flags = SDL_RENDERER_ACCELERATED;
+        if (vsync) flags |= SDL_RENDERER_PRESENTVSYNC;
+        sdl_renderer = SDL_CreateRenderer(window, -1, (vsync ? SDL_RENDERER_PRESENTVSYNC : 0) | SDL_RENDERER_ACCELERATED);
+        if (sdl_renderer == nullptr) {
+            printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
+            return;
+        }
+    }
+
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        std::cerr << "OpenGL error: " << std::endl;
+    }
+
+    screenSurface = SDL_GetWindowSurface(window);
+}
+
 
 #include "render.cpp"
 #include "audio.cpp"
@@ -66,8 +146,6 @@
 #define BOMB_COUNTDOWN_STARTTIME_BEEPS_PER_SECOND 0.5
 #define BOMB_COUNTDOWN_ENDTIME_BEEPS_PER_SECOND 3.0
 
-
-
 #include "entity.cpp"
 #include "player.cpp"
 
@@ -81,55 +159,17 @@
 
 
 static void GameGUIStart() {
-    SDL_Window *window=nullptr;
-    SDL_Surface *screenSurface = nullptr;
 
-    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
-        return;
-    }
     
-    if (TTF_Init() != 0) {
-        printf("Error: %s\n", TTF_GetError()); 
-        return;
-    }
-
-    if (IMG_Init(IMG_INIT_PNG) == 0) {
-        printf("Error: %s\n", IMG_GetError());
-        return;
-    }
-
-    if( Mix_OpenAudio( 44100, MIX_DEFAULT_FORMAT, 2, 2048 ) < 0 )
-    {
-        printf( "SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError() );
-        return;
-    }
-
     char winstr[] = "Client x";
     winstr[7] = (char)client_st.client_id + '0';
-    window = SDL_CreateWindow(winstr,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              1280,
-                              720,
-                              SDL_WINDOW_SHOWN);
-    printf("Created window\n");
+    initialize_systems(winstr,false);
 
     if (window == nullptr) {
         printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
     }
 
-    SDL_Renderer* sdl_renderer;
-
-    // SDL_RENDERER_PRESENTVSYNC | 
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
-    shitty_renderer_singleton=sdl_renderer;
-    if (sdl_renderer == nullptr) {
-        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
-        return;
-    }
-
-    screenSurface = SDL_GetWindowSurface(window);
+    
     init_textures(sdl_renderer);
     init_sfx();
     m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
@@ -167,13 +207,13 @@ static void GameGUIStart() {
         generic_drawable magazine_cnt_text;
         generic_drawable money_text;
     } gui_elements;
-    gui_elements.health_text = generate_text(sdl_renderer,m5x7,"100",{255,0,0,255});
+    gui_elements.health_text = generate_text(m5x7,"100",{255,0,0,255});
     gui_elements.health_text.scale = {4,4};
     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
     gui_elements.ability_ui_box.texture = textures[TexType::UI_TEXTURE];
 
     
-    gui_elements.money_text = generate_text(sdl_renderer,m5x7,"$800",{0,255,100,255});
+    gui_elements.money_text = generate_text(m5x7,"$800",{0,255,100,255});
     gui_elements.money_text.scale = {4,4};
     gui_elements.money_text.position = {16,16};
     
@@ -397,7 +437,7 @@ static void GameGUIStart() {
             
             if (player) {
                 if (player->health != p_health_before_update) {
-                    gui_elements.health_text = generate_text(sdl_renderer,m5x7,std::to_string(player->health),{255,0,0,255});
+                    gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
                     gui_elements.health_text.scale = {4,4};
                     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
                 } if (player->reloading) {
@@ -405,13 +445,13 @@ static void GameGUIStart() {
                     if (reload_str.size() > 3) {
                         reload_str.erase(reload_str.begin()+3,reload_str.end());
                     }
-                    gui_elements.reload_text = generate_text(sdl_renderer,m5x7,reload_str,{255,0,0,255});
+                    gui_elements.reload_text = generate_text(m5x7,reload_str,{255,0,0,255});
                     gui_elements.reload_text.position = player->pos + v2i(16-8,48);
                     gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
                 }
                 // draw money
                 if (gs.money[player->id] != p_money_before_update) {
-                    gui_elements.money_text = generate_text(sdl_renderer,m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
+                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
                     gui_elements.money_text.scale = {4,4};
                     gui_elements.money_text.position = {16,16};
                 }
@@ -516,7 +556,7 @@ static void GameGUIStart() {
             } else {
                 game_camera.pos = {1280/2,720/2};
             }
-            render_game_state(sdl_renderer,player,&game_camera);
+            render_game_state(player,&game_camera);
             // gui
             SDL_Rect health_rect,money_rect;
             health_rect = gui_elements.health_text.get_draw_rect();
@@ -534,9 +574,9 @@ static void GameGUIStart() {
             if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
                 std::string left_str = std::to_string(gs.score[0]);
                 std::string right_str = std::to_string(gs.score[1]);
-                generic_drawable middle_text = generate_text(sdl_renderer,m5x7,"-",{0,0,0,255});
-                generic_drawable left_text = generate_text(sdl_renderer,m5x7,left_str,*(SDL_Color*)&gs.players[0].color);
-                generic_drawable right_text = generate_text(sdl_renderer,m5x7,right_str,*(SDL_Color*)&gs.players[1].color);
+                generic_drawable middle_text = generate_text(m5x7,"-",{0,0,0,255});
+                generic_drawable left_text = generate_text(m5x7,left_str,*(SDL_Color*)&gs.players[0].color);
+                generic_drawable right_text = generate_text(m5x7,right_str,*(SDL_Color*)&gs.players[1].color);
                 
                 middle_text.scale = {16,16};
                 left_text.scale = {16,16};
@@ -567,20 +607,20 @@ static void GameGUIStart() {
                     SDL_RenderCopy(sdl_renderer,textures[TexType::UI_TEXTURE],NULL,&dest);
                     SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sp_rect);
                     if (ind==0 && player->invisibility_cooldown > 0) {
-                        render_ability_sprite(sprite,player->invisibility_cooldown,sdl_renderer);
+                        render_ability_sprite(sprite,player->invisibility_cooldown);
                     } else if (ind == 1 && player->shield_cooldown > 0) {
-                        render_ability_sprite(sprite,player->shield_cooldown,sdl_renderer);
+                        render_ability_sprite(sprite,player->shield_cooldown);
                     } else if (ind == 2 && player->fireburst_cooldown > 0) {
-                        render_ability_sprite(sprite,player->fireburst_cooldown,sdl_renderer);
+                        render_ability_sprite(sprite,player->fireburst_cooldown);
                     } else if (ind == 3 && player->reloading) {
-                        render_ability_sprite(sprite,player->reload_timer,sdl_renderer);
+                        render_ability_sprite(sprite,player->reload_timer);
                     }
                 }
                 local_persist i32 ammo_cnt = 0;
                 if (player->bullets_in_mag != ammo_cnt) {
                     ammo_cnt = player->bullets_in_mag;
                     std::string ammo_str = std::to_string(ammo_cnt);
-                    gui_elements.magazine_cnt_text = generate_text(sdl_renderer,m5x7,ammo_str,{255,255,255,255});
+                    gui_elements.magazine_cnt_text = generate_text(m5x7,ammo_str,{255,255,255,255});
                     gui_elements.magazine_cnt_text.scale = {4,4};
                     auto ab_pos = gui_elements.ability_sprites[3].get_draw_rect();
                     gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
@@ -635,10 +675,10 @@ static void GameGUIStart() {
                     strcpy_s(p.data.chat_message.name,MAX_USERNAME_LENGTH,client_st.username.c_str());
                     // ought to put this in the client tick code? idk man. doesn't matter too much tho
                     send_packet(client_st.socket,&client_st.servaddr,&p);
-                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display,sdl_renderer);
+                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display);
                     //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display);
 
-                    //add_to_chatlog("Luke",chatbox_text,target_tick,&chatlog_display,sdl_renderer);
+                    //add_to_chatlog("Luke",chatbox_text,target_tick,&chatlog_display);
                     chatbox_text="";
                     chatbox_isopen=false;
                     
@@ -647,7 +687,7 @@ static void GameGUIStart() {
                     input.text_input_captured=false;
                     input.input_field = nullptr;
                 } else if (input.text_modified) {
-                    chatbox_entry = generate_text(sdl_renderer,m5x7,chatbox_text,{255,255,255,255});
+                    chatbox_entry = generate_text(m5x7,chatbox_text,{255,255,255,255});
                     chatbox_entry.scale = {2,2};
                     chatbox_entry.position = {text_input_rect.x + 4, text_input_rect.y + text_input_rect.h - chatbox_entry.get_draw_rect().h-4};
                 }
@@ -742,7 +782,7 @@ static void GameGUIStart() {
 
                 std::string curr_tick_str = "Tick: " + std::to_string(target_tick);
                 std::string last_input_processed_by_server_str = "Last processed input: " + std::to_string(last_proc_tick);
-                generic_drawable curr_tick = generate_text(sdl_renderer,m5x7,curr_tick_str, {0,255,0,255});
+                generic_drawable curr_tick = generate_text(m5x7,curr_tick_str, {0,255,0,255});
                 curr_tick.position = {graph_box_rect.x, graph_box_rect.y + graph_box_rect.h+4};
                 curr_tick.scale = {2,2};
 
@@ -752,7 +792,7 @@ static void GameGUIStart() {
                 } else {
                     col = {255,0,0,255};
                 }
-                generic_drawable last_proc = generate_text(sdl_renderer,m5x7,last_input_processed_by_server_str, col);
+                generic_drawable last_proc = generate_text(m5x7,last_input_processed_by_server_str, col);
                 last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_rect().h + 4);
                 last_proc.scale = {2,2};
 
@@ -785,7 +825,7 @@ static void GameGUIStart() {
                 time_to_start = static_cast<double>(client_st.gms.game_start_time.QuadPart - client_st.sync_timer.get_high_res_elapsed().QuadPart)/client_st.sync_timer.frequency.QuadPart;
             }
         
-            render_pregame_screen(sdl_renderer,client_st.gms,time_to_start);
+            render_pregame_screen(client_st.gms,time_to_start);
             // render player color selector
             /*SDL_Rect p_rect = {0,0,32,32};
             SDL_Rect dest_rect = {200,500,64,64};
@@ -794,6 +834,8 @@ static void GameGUIStart() {
         }
 
 endof_frame:
+
+        SDL_GL_SwapWindow(window);
         
         SDL_RenderPresent(sdl_renderer);
         
@@ -822,45 +864,7 @@ endof_frame:
 }
 
 static void demo() {
-    SDL_Window *window=nullptr;
-    SDL_Surface *screenSurface = nullptr;
-
-    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
-        return;
-    }
-    
-    if (TTF_Init() != 0) {
-        printf("Error: %s\n", TTF_GetError()); 
-        return;
-    }
-
-    if (IMG_Init(IMG_INIT_PNG) == 0) {
-        printf("Error: %s\n", IMG_GetError());
-        return;
-    }
-
-    window = SDL_CreateWindow("Demo",
-                              SDL_WINDOWPOS_UNDEFINED,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              1280,
-                              720,
-                              SDL_WINDOW_SHOWN);
-    printf("Created window\n");
-
-    if (window == nullptr) {
-        printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
-    }
-
-    SDL_Renderer* sdl_renderer;
-    
-
-    sdl_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
-    shitty_renderer_singleton = sdl_renderer;
-    if (sdl_renderer == nullptr) {
-        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
-        return;
-    }
+    initialize_systems("Demo",false,false);
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
@@ -1038,11 +1042,52 @@ int main(int argc, char *argv[]) {
         // demo
         demo();
     } else {
+        if (argc > 1) {
+            int port = DEFAULT_PORT;
+            if (argc > 1) {
+                sscanf_s(argv[1],"%d",&port);
+            }
+            server(port);
+            goto cleanup;
+        }
+#ifdef RELEASE_BUILD
+        std::string res;
+        printf("Server or client? (leave empty for server) ");
+        getline(std::cin,res);
+        if (res == "") {
+            int port = DEFAULT_PORT;
+            printf("Port number? (leave empty for default) ");
+            std::string p_num;
+            getline(std::cin,p_num);
+            if (p_num != "") {
+                port = std::stoi(p_num);
+            }
+            server(port);
+        } else {
+            std::string ip_addr=DEFAULT_IP;
+            printf("Ip address? (leave empty for 127.0.0.1) ");
+            std::string ip_input;
+            getline(std::cin,ip_input);
+            if (ip_input != "") {
+                ip_addr = ip_input;
+            }
+            int port = DEFAULT_PORT;
+            printf("Port number? (leave empty for default) ");
+            std::string p_num;
+            getline(std::cin,p_num);
+            if (p_num != "") {
+                port = std::stoi(p_num);
+            }
+            client_connect(port,ip_addr);
+        }
+#else
         int port = DEFAULT_PORT;
         if (argc > 1) {
             sscanf_s(argv[1],"%d",&port);
         }
         server(port);
+#endif
     }
+cleanup:
     return 0;
 }
