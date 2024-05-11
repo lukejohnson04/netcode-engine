@@ -23,7 +23,8 @@ enum TexType {
     TEXTURE_COUNT
 };
 
-GLuint sh_maskProgram, sh_testProgram;
+GLuint sh_textureProgram, sh_colorProgram;
+GLuint gl_texture;
 
 SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
 
@@ -103,8 +104,8 @@ SDL_Texture *LoadTexture(SDL_Renderer *renderer,const char* path) {
 }
 
 static void init_textures(SDL_Renderer *renderer) {
-    sh_maskProgram = createShaderProgram("../src/shader.vert","../src/shader.frag");
-    sh_testProgram = createShaderProgram("../src/shader.vert","../src/test.frag");
+    sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
+    sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
     
     textures[TexType::PLAYER_TEXTURE] = LoadTexture(renderer,"res/charas.png");
     textures[TexType::BULLET_TEXTURE] = LoadTexture(renderer,"res/bullet.png");
@@ -136,6 +137,20 @@ static void init_textures(SDL_Renderer *renderer) {
             printf("WARNING: texture with ID %d is not loaded\n",ind);
         }
     }
+
+    SDL_Surface *tex_surf = IMG_Load("res/dot.png");
+    glGenTextures(1,&gl_texture);
+    glBindTexture(GL_TEXTURE_2D, gl_texture);
+
+    int Mode = GL_RGB;
+    if(tex_surf->format->BytesPerPixel == 4) {
+        Mode = GL_RGBA;
+    }
+    
+    glTexImage2D(GL_TEXTURE_2D, 0, Mode, tex_surf->w, tex_surf->h, 0, Mode, GL_UNSIGNED_BYTE, tex_surf->pixels);
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);    
 }
 
 
@@ -263,3 +278,85 @@ GLuint createShaderProgram(const char* vertexSource, const char* fragmentSource)
 }
 
  */
+
+void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
+    float vertices[] = {
+        (float)rect.x+rect.w,    (float)rect.y,           0.0f,
+        (float)rect.x+rect.w,    (float)rect.y+rect.h,    0.0f,
+        (float)rect.x,           (float)rect.y+rect.h,    0.0f,
+        (float)rect.x,           (float)rect.y,           0.0f
+    };
+
+    GLuint colUni = glGetUniformLocation(sh_colorProgram, "color");
+    float colorF[] = {(float)color.r/255.f,(float)color.g/255.f,(float)color.b/255.f,(float)color.a/255.f};
+    glUniform4f(colUni, colorF[0],colorF[1],colorF[2],colorF[3]);
+
+    // we don't have to repass the projection every frame, unless it changes
+    /*
+    GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
+    glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, &projection[0][0]);
+    */
+
+
+    GLuint VAO,VBO;
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    // position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER,0);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glBindVertexArray(0);    
+}
+
+
+void GL_DrawTexture(iRect rect, GLuint texture) {
+    float vertices[] = {
+        (float)rect.x,           (float)rect.y,        0.0f, 0.0f, 0.0f,
+        (float)rect.x+rect.w,    (float)rect.y,        0.0f, 1.0f, 0.0f,
+        (float)rect.x+rect.w,    (float)rect.y+rect.h, 0.0f, 1.0f, 1.0f,
+        (float)rect.x,           (float)rect.y+rect.h, 0.0f, 0.0f, 1.0f,
+    };
+    
+    GLuint VAO,VBO;
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    
+    glBindVertexArray(VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    
+    GLint textureLoc = glGetUniformLocation(sh_textureProgram,"_texture");
+    glUniform1i(textureLoc,0);
+    
+    // position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindBuffer(GL_ARRAY_BUFFER,0);
+    glBindVertexArray(0);    
+
+
+
+
+
+    glBindVertexArray(VAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,texture);
+    //GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
+    //glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
+
+
+    
+
+    
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glBindVertexArray(0);
+}

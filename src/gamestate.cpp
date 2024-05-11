@@ -608,7 +608,7 @@ struct {
 bool draw_shadows=true;
 
 void render_game_state(character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr) {
-    glUseProgram(sh_testProgram);
+    //glUseProgram(sh_);
     
     // Render start
     SDL_SetRenderDrawColor(sdl_renderer,255,255,0,255);

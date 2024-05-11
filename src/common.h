@@ -185,6 +185,14 @@ struct Color {
 };
 
 
+const Color COLOR_BLACK = Color(0,0,0,255);
+const Color COLOR_WHITE = Color(255,255,255,255);
+const Color COLOR_RED = Color(255,0,0,255);
+const Color COLOR_BLUE = Color(0,0,255,255);
+const Color COLOR_GREEN = Color(0,255,0,255);
+const Color COLOR_YELLOW = Color(255,255,0,255);
+
+
 inline bool operator==(Color left, Color right) {
     return *(u32*)&left == *(u32*)&right;
 }

@@ -33,6 +33,8 @@
 #define SDL_MAIN_HANDLED
 
 #include <GL/glew.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -42,10 +44,14 @@
 
 #include "common.h"
 
+#define WINDOW_WIDTH 1280
+#define WINDOW_HEIGHT 720
+
 SDL_Window *window = nullptr;
 SDL_Surface *screenSurface = nullptr;
 SDL_Renderer *sdl_renderer=nullptr;
 SDL_GLContext glContext;
+glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(WINDOW_WIDTH), static_cast<float>(WINDOW_HEIGHT), 0.0f, -1.0f, 1.0f);
 
 void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true) {
     if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_VIDEO_OPENGL) < 0) {
@@ -864,7 +870,7 @@ endof_frame:
 }
 
 static void demo() {
-    initialize_systems("Demo",false,false);
+    initialize_systems("Demo",true,true);
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures(sdl_renderer);
@@ -899,23 +905,90 @@ static void demo() {
         client_sided_render_geometry.segments.push_back({p3,p4});
     }
 
-    SDL_Texture *dot = IMG_LoadTexture(sdl_renderer,"res/dot.png");
+    float x = 300.0f;
+    float y = 200.0f;
+    float width = 200.0f;
+    float height = 150.0f;
+
+    float vertices[] = {
+        x + width, y,         0.0f,  // top right
+        x + width, y + height, 0.0f,  // bottom right
+        x,        y + height, 0.0f,  // bottom left
+        x,        y,          0.0f   // top left 
+    };
+
+
+    SDL_Surface *tex_surf = IMG_Load("res/flintlock.png");
+    if (tex_surf == NULL) {
+        std::cout << "FUCK\n";
+    }
+
+    int Mode = GL_RGBA;
+    if(tex_surf->format->BytesPerPixel == 3) {
+        Mode = GL_RGB;
+        printf("Not alpha");
+    }
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    GLuint dot_tex;
+    glGenTextures(1,&dot_tex);
+
+    glBindTexture(GL_TEXTURE_2D, dot_tex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_surf->w, tex_surf->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_surf->pixels);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
+    sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
+
+
+    glUseProgram(sh_textureProgram);
+    GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
+
+    glUseProgram(sh_colorProgram);
+    GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
+    glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, &projection[0][0]);
+    
+
+    clock_t start_time = clock();
     
     while (running) {
         // input
         PollEvents(&input,&running);
-        SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
-        SDL_RenderClear(sdl_renderer);
-        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+        glClearColor(0.25f, 0.25f, 0.5f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(sh_colorProgram);
+
+        // Draw the rectangle
+        clock_t curr_time = clock();
+        double elapsed = (double)(curr_time - start_time) / CLOCKS_PER_SEC;
+        float sin_val = (float)sin((elapsed+1)/2);
+        float cos_val = (float)cos((elapsed+1)/2);
+        float tan_val = (float)tan((elapsed+1)/2);
+        
         FORn(walls,wall_count,wall) {
-            SDL_Rect rect = {(int)wall->x*64,wall->y*64,64,64};
-            SDL_RenderFillRect(sdl_renderer, &rect);
+            Color col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),(u8)(tan_val*255.f),255);
+            GL_DrawRect({wall->x*64,wall->y*64,64,64},col);
         }
 
-        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
 
         v2i mpos = get_mouse_position();
+        glUseProgram(sh_textureProgram);
+        GL_DrawTexture({200,200,128,128},dot_tex);
 
+        /*
+        float vertices[] = {
+            
+        }
+        */
+        
         /*
           Draft 2
         for (i32 n=0;n<40;n++) {
@@ -940,7 +1013,7 @@ static void demo() {
         /* draft 3 & 4 */
         // so comically slow LMAO
         SDL_Rect dot_start = {mpos.x-8,mpos.y-8,16,16};
-        SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
+        //SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
 
         i32 pt_count=wall_count*4;
         std::vector<v2i> dests;
@@ -991,6 +1064,7 @@ static void demo() {
             return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
         });
 
+        /*
         for (i32 n=0;n<dests.size();n++) {
             v2i pt=dests[n];
             v2i prev_point=n==0?dests.back():dests[n-1];
@@ -1000,6 +1074,7 @@ static void demo() {
             SDL_Vertex vertices[] = {vertex_1,vertex_2,vertex_3};
             SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
         }
+        */
 
         /*
         SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
@@ -1010,7 +1085,8 @@ static void demo() {
             SDL_RenderDrawLine(sdl_renderer,dot_start.x+8,dot_start.y+8,dot_dest.x+8,dot_dest.y+8);
         }
         */
-        SDL_RenderPresent(sdl_renderer);
+        SDL_GL_SwapWindow(window);
+        //SDL_RenderPresent(sdl_renderer);
 
         //SDL_RenderPresent(sdl_renderer);
     }
