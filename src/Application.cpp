@@ -176,10 +176,9 @@ static void GameGUIStart() {
     }
 
     
-    init_textures(sdl_renderer);
+    init_textures();
     init_sfx();
     m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
-    
 
     bool running=true;
 
@@ -873,7 +872,7 @@ static void demo() {
     initialize_systems("Demo",true,true);
 
     screenSurface = SDL_GetWindowSurface(window);
-    init_textures(sdl_renderer);
+    init_textures();
     m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
@@ -910,43 +909,10 @@ static void demo() {
     float width = 200.0f;
     float height = 150.0f;
 
-    float vertices[] = {
-        x + width, y,         0.0f,  // top right
-        x + width, y + height, 0.0f,  // bottom right
-        x,        y + height, 0.0f,  // bottom left
-        x,        y,          0.0f   // top left 
-    };
-
-
-    SDL_Surface *tex_surf = IMG_Load("res/flintlock.png");
-    if (tex_surf == NULL) {
-        std::cout << "FUCK\n";
-    }
-
-    int Mode = GL_RGBA;
-    if(tex_surf->format->BytesPerPixel == 3) {
-        Mode = GL_RGB;
-        printf("Not alpha");
-    }
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    GLuint dot_tex;
-    glGenTextures(1,&dot_tex);
-
-    glBindTexture(GL_TEXTURE_2D, dot_tex);
-
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_surf->w, tex_surf->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_surf->pixels);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    GLuint dot_tex = GL_load_texture("res/flintlock.png");
 
     sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
     sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
-
 
     glUseProgram(sh_textureProgram);
     GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
@@ -955,9 +921,12 @@ static void demo() {
     glUseProgram(sh_colorProgram);
     GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
     glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, &projection[0][0]);
-    
 
     clock_t start_time = clock();
+
+    GLuint shadow_VAO,shadow_VBO;
+    glGenBuffers(1,&shadow_VBO);
+    glGenVertexArrays(1,&shadow_VAO);
     
     while (running) {
         // input
@@ -969,25 +938,20 @@ static void demo() {
         // Draw the rectangle
         clock_t curr_time = clock();
         double elapsed = (double)(curr_time - start_time) / CLOCKS_PER_SEC;
-        float sin_val = (float)sin((elapsed+1)/2);
-        float cos_val = (float)cos((elapsed+1)/2);
-        float tan_val = (float)tan((elapsed+1)/2);
+        
+        double sin_val = (sin(elapsed)+1)/2;
+        double cos_val = (cos(elapsed)+1)/2;
+        double tan_val = (tan(elapsed)+1)/2;
         
         FORn(walls,wall_count,wall) {
-            Color col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),(u8)(tan_val*255.f),255);
+            Color col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),255,255);//(u8)(tan_val*255.f),255);
             GL_DrawRect({wall->x*64,wall->y*64,64,64},col);
         }
 
 
         v2i mpos = get_mouse_position();
         glUseProgram(sh_textureProgram);
-        GL_DrawTexture({200,200,128,128},dot_tex);
-
-        /*
-        float vertices[] = {
-            
-        }
-        */
+        GL_DrawTexture({mpos.x-16,mpos.y-16,32,32},dot_tex);
         
         /*
           Draft 2
@@ -1064,17 +1028,26 @@ static void demo() {
             return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
         });
 
-        /*
+        glUseProgram(sh_colorProgram);
         for (i32 n=0;n<dests.size();n++) {
             v2i pt=dests[n];
             v2i prev_point=n==0?dests.back():dests[n-1];
-            SDL_Vertex vertex_1 = {{(float)mpos.x,(float)mpos.y}, {169,85,75, 255}, {1, 1}};
-            SDL_Vertex vertex_2 = {{(float)pt.x,(float)pt.y}, {169,85,75, 255}, {1, 1}};
-            SDL_Vertex vertex_3 = {{(float)prev_point.x,(float)prev_point.y}, {169,85,75,255}, {1, 1}};
-            SDL_Vertex vertices[] = {vertex_1,vertex_2,vertex_3};
-            SDL_RenderGeometry(sdl_renderer, NULL, vertices, 3, NULL, 0);
+            float vertices[] = {
+                (float)mpos.x,(float)mpos.y, 0.0f,
+                (float)pt.x,  (float)pt.y,   0.0f,
+                (float)prev_point.x, (float)prev_point.y, 0.0f
+            };
+            glBindVertexArray(shadow_VAO);
+            glBindBuffer(GL_ARRAY_BUFFER,shadow_VBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3 * sizeof(float),0);
+            glEnableVertexAttribArray(0);
+
+            glDrawArrays(GL_TRIANGLES,0,3);
+            glBindBuffer(GL_ARRAY_BUFFER,0);
+            glBindVertexArray(0);
         }
-        */
 
         /*
         SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);

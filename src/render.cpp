@@ -24,9 +24,9 @@ enum TexType {
 };
 
 GLuint sh_textureProgram, sh_colorProgram;
-GLuint gl_texture;
 
 SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
+GLuint gl_textures[TEXTURE_COUNT] = {NULL};
 
 
 std::string readShaderFile(const std::string &shaderPath) {
@@ -103,54 +103,83 @@ SDL_Texture *LoadTexture(SDL_Renderer *renderer,const char* path) {
     return res;
 }
 
-static void init_textures(SDL_Renderer *renderer) {
+
+
+
+internal void GL_load_texture(GLuint tex, const char* path) {
+    SDL_Surface *tex_surf = IMG_Load(path);
+    if (tex_surf == NULL) {
+        std::cout << "ERROR: Failed to load texture at path " << path << std::endl;
+        return;
+    }
+
+    int Mode = GL_RGBA;
+    if(tex_surf->format->BytesPerPixel == 3) {
+        Mode = GL_RGB;
+        printf("Not alpha");
+    }
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_surf->w, tex_surf->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_surf->pixels);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+}
+
+internal GLuint GL_load_texture(const char* path) {
+    GLuint res;
+    glGenTextures(1,&res);
+    GL_load_texture(res,path);
+    return res;
+}
+
+
+static void init_textures() {
     sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
     sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
-    
-    textures[TexType::PLAYER_TEXTURE] = LoadTexture(renderer,"res/charas.png");
-    textures[TexType::BULLET_TEXTURE] = LoadTexture(renderer,"res/bullet.png");
-    textures[TexType::PREGAME_TEXTURE] = LoadTexture(renderer,"res/pregame_screen.png");
-    textures[TexType::STARTGAME_BUTTON_TEXTURE] = LoadTexture(renderer,"res/start_game_button.png");
-    textures[TexType::LEVEL_TEXTURE] = LoadTexture(renderer,"res/levels.png");
-    textures[TexType::ABILITIES_TEXTURE] = LoadTexture(renderer,"res/abilities.png");
-    textures[TexType::UI_TEXTURE] = LoadTexture(renderer,"res/ui.png");
-    textures[TexType::BUY_MENU_WEAPONS_TEXTURE] = LoadTexture(renderer,"res/buy_menu_weapons.png");
-    textures[TexType::BUY_MENU_TEXTURE] = LoadTexture(renderer,"res/buy_menu.png");
-    textures[TexType::TILE_TEXTURE] = LoadTexture(renderer,"res/tiles.png");
-    textures[TexType::ITEM_TEXTURE] = LoadTexture(renderer,"res/items.png");    
-    textures[TexType::RAYCAST_DOT_TEXTURE] = LoadTexture(renderer,"res/dot.png");
-    textures[TexType::WORLD_OBJECTS_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
 
-    textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
-    SDL_SetTextureBlendMode(textures[SHADOW_TEXTURE],SDL_BLENDMODE_MOD);
-    SDL_SetTextureBlendMode(textures[WORLD_OBJECTS_TEXTURE],SDL_BLENDMODE_BLEND);
+    glGenTextures(TEXTURE_COUNT,gl_textures);
 
-    textures[TexType::STATIC_MAP_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,32*64,32*64);
+    GL_load_texture(gl_textures[PLAYER_TEXTURE],"res/charas.png");    
+    GL_load_texture(gl_textures[BULLET_TEXTURE],"res/bullet.png");    
+    GL_load_texture(gl_textures[PREGAME_TEXTURE],"res/pregame_screen.png");    
+    GL_load_texture(gl_textures[STARTGAME_BUTTON_TEXTURE],"res/start_game_button.png");    
+    GL_load_texture(gl_textures[LEVEL_TEXTURE],"res/levels.png");    
+    GL_load_texture(gl_textures[ABILITIES_TEXTURE],"res/abilities.png");    
+    GL_load_texture(gl_textures[UI_TEXTURE],"res/ui.png");
+    GL_load_texture(gl_textures[BUY_MENU_WEAPONS_TEXTURE],"res/buy_menu_weapons.png");
+    GL_load_texture(gl_textures[BUY_MENU_TEXTURE],"res/buy_menu.png");
+    GL_load_texture(gl_textures[TILE_TEXTURE],"res/tiles.png");
+    GL_load_texture(gl_textures[ITEM_TEXTURE],"res/items.png");
+    GL_load_texture(gl_textures[RAYCAST_DOT_TEXTURE],"res/dot.png");
 
+    //GL_load_texture(gl_textures[WORLD_OBJECTS_TEXTURE],"res/dot.png");
+    // come back to this
+    //gl_textures[WORLD_OBJECTS_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
+    //textures[TexType::SHADOW_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,1280,720);
+    //SDL_SetTextureBlendMode(textures[SHADOW_TEXTURE],SDL_BLENDMODE_MOD);
+    //SDL_SetTextureBlendMode(textures[WORLD_OBJECTS_TEXTURE],SDL_BLENDMODE_BLEND);
+
+    //textures[TexType::STATIC_MAP_TEXTURE] = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,32*64,32*64);
+
+    /*
     SDL_SetRenderDrawColor(renderer,255,255,0,255);
     SDL_SetRenderTarget(renderer,textures[TexType::STATIC_MAP_TEXTURE]);
     SDL_RenderClear(renderer);
     SDL_SetRenderTarget(renderer,NULL);
+    */
 
     for(i32 ind=0;ind<TEXTURE_COUNT;ind++) {
-        if (textures[ind] == nullptr) {
+        if (gl_textures[ind] == NULL) {
             printf("WARNING: texture with ID %d is not loaded\n",ind);
         }
     }
-
-    SDL_Surface *tex_surf = IMG_Load("res/dot.png");
-    glGenTextures(1,&gl_texture);
-    glBindTexture(GL_TEXTURE_2D, gl_texture);
-
-    int Mode = GL_RGB;
-    if(tex_surf->format->BytesPerPixel == 4) {
-        Mode = GL_RGBA;
-    }
-    
-    glTexImage2D(GL_TEXTURE_2D, 0, Mode, tex_surf->w, tex_surf->h, 0, Mode, GL_UNSIGNED_BYTE, tex_surf->pixels);
-    
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);    
 }
 
 
@@ -298,9 +327,13 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
     */
 
 
-    GLuint VAO,VBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
+    local_persist GLuint VAO,VBO;
+    local_persist bool generated=false;
+    if (!generated) {
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+        generated=true;
+    }
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
@@ -314,6 +347,8 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
 }
 
 
+
+
 void GL_DrawTexture(iRect rect, GLuint texture) {
     float vertices[] = {
         (float)rect.x,           (float)rect.y,        0.0f, 0.0f, 0.0f,
@@ -322,12 +357,16 @@ void GL_DrawTexture(iRect rect, GLuint texture) {
         (float)rect.x,           (float)rect.y+rect.h, 0.0f, 0.0f, 1.0f,
     };
     
-    GLuint VAO,VBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
+    local_persist GLuint VAO,VBO;
+    local_persist bool generated=false;
+
+    if (!generated) {
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+        generated=true;
+    }
     
     glBindVertexArray(VAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 

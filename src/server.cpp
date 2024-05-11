@@ -220,7 +220,7 @@ static void server(int port) {
     initialize_systems("server",false);
 
     screenSurface = SDL_GetWindowSurface(window);
-    init_textures(sdl_renderer);
+    init_textures();
     m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
