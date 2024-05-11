@@ -24,6 +24,7 @@ enum TexType {
 };
 
 GLuint sh_textureProgram, sh_colorProgram;
+TTF_Font *m5x7=nullptr;
 
 SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
 GLuint gl_textures[TEXTURE_COUNT] = {NULL};
@@ -113,14 +114,11 @@ internal void GL_load_texture(GLuint tex, const char* path) {
         return;
     }
 
-    int Mode = GL_RGBA;
-    if(tex_surf->format->BytesPerPixel == 3) {
-        Mode = GL_RGB;
-        printf("Not alpha");
+    int Mode = GL_RGB;
+    if(tex_surf->format->BytesPerPixel == 4) {
+        Mode = GL_RGBA;
+        printf("alpha");
     }
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     glBindTexture(GL_TEXTURE_2D, tex);
 
@@ -131,6 +129,62 @@ internal void GL_load_texture(GLuint tex, const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 }
+
+internal void GL_load_texture_from_surface(GLuint tex,SDL_Surface *tex_surf) {
+    std::cout << "Surface format: " << SDL_GetPixelFormatName(tex_surf->format->format) << std::endl;
+    GLenum format = 0, type = GL_UNSIGNED_BYTE; // Default to unsigned byte for type
+
+    switch (tex_surf->format->format) {
+        case SDL_PIXELFORMAT_RGBA8888:
+            format = GL_RGBA;
+            break;
+        case SDL_PIXELFORMAT_ABGR8888:
+            format = GL_BGRA;
+            break;
+        case SDL_PIXELFORMAT_BGRA8888:
+            format = GL_BGRA;
+            break;
+        case SDL_PIXELFORMAT_ARGB8888:
+            format = GL_BGRA;
+            break;
+        case SDL_PIXELFORMAT_RGB888:
+        case SDL_PIXELFORMAT_RGB24:
+            format = GL_RGB;
+            break;
+        case SDL_PIXELFORMAT_BGR888:
+            format = GL_BGR;
+            break;
+        case SDL_PIXELFORMAT_RGB565:
+            format = GL_RGB;
+            type = GL_UNSIGNED_SHORT_5_6_5;
+            break;
+        case SDL_PIXELFORMAT_RGBA4444:
+            format = GL_RGBA;
+            type = GL_UNSIGNED_SHORT_4_4_4_4;
+            break;
+        case SDL_PIXELFORMAT_RGB332:
+            format = GL_RGB;
+            type = GL_UNSIGNED_BYTE_3_3_2;
+            break;
+        default:
+            break;
+    }
+
+    if (format == 0) {
+        std::cerr << "No valid OpenGL format found. Texture creation aborted." << std::endl;
+        return;
+    }
+
+    std::cout << "Loading texture from surface of dimensions " << tex_surf->w << ", " << tex_surf->h << std::endl;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, format == GL_RGB ? GL_RGB8 : GL_RGBA8, tex_surf->w, tex_surf->h, 0, format, type, tex_surf->pixels);
+    glGenerateMipmap(GL_TEXTURE_2D);
+}
+
 
 internal GLuint GL_load_texture(const char* path) {
     GLuint res;
@@ -179,6 +233,10 @@ static void init_textures() {
         if (gl_textures[ind] == NULL) {
             printf("WARNING: texture with ID %d is not loaded\n",ind);
         }
+    }
+    m5x7 = TTF_OpenFont("res/m5x7.ttf",32);
+    if (m5x7 == nullptr) {
+        printf("ERROR: failed to load res/m5x7.ttf!\n");
     }
 }
 
@@ -237,14 +295,35 @@ camera_t *global_cam=nullptr;
 struct generic_drawable {
     v2i position={0,0};
     SDL_Texture *texture=nullptr;
+    GLuint gl_texture=NULL;
     v2 scale={1,1};
     iRect bound = {0,0,0,0};
+
     SDL_Rect get_draw_rect() {
-        int w=bound.w,h=bound.h;
         if (bound.w==0||bound.h==0) {
-            SDL_QueryTexture(texture,NULL,NULL,&w,&h);
+            glBindTexture(GL_TEXTURE_2D,gl_texture);
+            // mipmap level is 0
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &bound.h);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &bound.h);
+
+            //SDL_QueryTexture(texture,NULL,NULL,&w,&h);
         }
+        int w=bound.w,h=bound.h;
         SDL_Rect res={position.x,position.y,(int)((float)w*scale.x),(int)((float)h*scale.y)};
+        return res;
+    }
+
+    iRect get_draw_irect() {
+        if (bound.w==0||bound.h==0) {
+            glBindTexture(GL_TEXTURE_2D,gl_texture);
+            // mipmap level is 0
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &bound.w);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &bound.h);
+
+            //SDL_QueryTexture(texture,NULL,NULL,&w,&h);
+        }
+        int w=bound.w,h=bound.h;
+        iRect res={position.x,position.y,(int)((float)w*scale.x),(int)((float)h*scale.y)};
         return res;
     }
 };
@@ -253,19 +332,22 @@ generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255
     generic_drawable res;
     
     SDL_Surface* temp_surface =
-        TTF_RenderText_Solid(font, str.c_str(), col);        
+        TTF_RenderText_Solid(font, str.c_str(), col);
+    temp_surface = SDL_ConvertSurfaceFormat(temp_surface, SDL_PIXELFORMAT_ARGB8888, 0);
 
-    if (res.texture) {
-        SDL_DestroyTexture(res.texture);
+    if (res.gl_texture == NULL) {
+        glGenTextures(1,&res.gl_texture);
     }
-    res.texture = SDL_CreateTextureFromSurface(sdl_renderer, temp_surface);
+    GL_load_texture_from_surface(res.gl_texture,temp_surface);
+    
+    
     SDL_FreeSurface(temp_surface);
     return res;
 }
 
-TTF_Font *m5x7=nullptr;
 
 void render_ability_sprite(generic_drawable *sprite,double timer) {
+    /*
     SDL_Rect draw_rect = sprite->get_draw_rect();
     SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&draw_rect);
     if (timer > 0) {
@@ -283,6 +365,7 @@ void render_ability_sprite(generic_drawable *sprite,double timer) {
         SDL_Rect cl_draw_rect = cooldown_text.get_draw_rect();
         SDL_RenderCopy(sdl_renderer,cooldown_text.texture,NULL,&cl_draw_rect);
     }
+    */
 }
 
 
@@ -349,7 +432,7 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
 
 
 
-void GL_DrawTexture(iRect rect, GLuint texture) {
+void GL_DrawTexture(GLuint texture, iRect rect) {
     float vertices[] = {
         (float)rect.x,           (float)rect.y,        0.0f, 0.0f, 0.0f,
         (float)rect.x+rect.w,    (float)rect.y,        0.0f, 1.0f, 0.0f,
@@ -382,18 +465,11 @@ void GL_DrawTexture(iRect rect, GLuint texture) {
     glBindBuffer(GL_ARRAY_BUFFER,0);
     glBindVertexArray(0);    
 
-
-
-
-
     glBindVertexArray(VAO);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D,texture);
     //GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
     //glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
-
-
-    
 
     
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);

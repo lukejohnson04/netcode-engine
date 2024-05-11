@@ -75,7 +75,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
         return;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);  // Use OpenGL 3.x
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);  // Use OpenGL 3.x
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);  // Version 3.3, for example
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);    
 
@@ -101,7 +101,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
     }
 
     SDL_GL_MakeCurrent(window, glContext);
-
+    
     glewInit();
 
     if (init_renderer) {
@@ -114,9 +114,22 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
         }
     }
 
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     GLenum err = glGetError();
+    
     if (err != GL_NO_ERROR) {
-        std::cerr << "OpenGL error: " << std::endl;
+        std::string error;
+        switch(err) {
+            case GL_INVALID_OPERATION:      error="INVALID_OPERATION";      break;
+            case GL_INVALID_ENUM:           error="INVALID_ENUM";           break;
+            case GL_INVALID_VALUE:          error="INVALID_VALUE";          break;
+            case GL_OUT_OF_MEMORY:          error="OUT_OF_MEMORY";          break;
+            case GL_INVALID_FRAMEBUFFER_OPERATION:  error="INVALID_FRAMEBUFFER_OPERATION";  break;
+        }
+ 
+        std::cout << "OPENGL ERROR: " << error << std::endl;
     }
 
     screenSurface = SDL_GetWindowSurface(window);
@@ -174,11 +187,9 @@ static void GameGUIStart() {
     if (window == nullptr) {
         printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
     }
-
     
     init_textures();
     init_sfx();
-    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
 
@@ -869,11 +880,10 @@ endof_frame:
 }
 
 static void demo() {
-    initialize_systems("Demo",true,true);
+    initialize_systems("Demo",true,false);
 
     screenSurface = SDL_GetWindowSurface(window);
     init_textures();
-    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
 
@@ -908,7 +918,7 @@ static void demo() {
     float y = 200.0f;
     float width = 200.0f;
     float height = 150.0f;
-
+    
     GLuint dot_tex = GL_load_texture("res/flintlock.png");
 
     sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
@@ -927,7 +937,44 @@ static void demo() {
     GLuint shadow_VAO,shadow_VBO;
     glGenBuffers(1,&shadow_VBO);
     glGenVertexArrays(1,&shadow_VAO);
+    if (false) {
+        /*
+        SDL_Surface *Surface = TTF_RenderText_Blended(m5x7,"testing 123",{255,0,0,255});
+        Surface = SDL_ConvertSurfaceFormat(Surface, SDL_PIXELFORMAT_ARGB8888, 0);
+        
+        glGenTextures(1, &text_tex);
+        glBindTexture(GL_TEXTURE_2D, text_tex);
+ 
+        int Mode = GL_RGB;
+ 
+        if(Surface->format->BytesPerPixel == 4) {
+            Mode = GL_RGBA;
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Surface->w, Surface->h, 0, GL_BGRA, GL_UNSIGNED_BYTE, Surface->pixels);
+ 
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        */
+    }
+    generic_drawable text_drawable = generate_text(m5x7,"hello",{255,0,255,255});
+    text_drawable.position = {500,500};
     
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        std::cerr << "OpenGL Error: " << err << std::endl;
+    }
+
+    /*
+    int w, h;
+    int miplevel = 0;
+    glBindTexture(GL_TEXTURE_2D,text_tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, miplevel, GL_TEXTURE_WIDTH, &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, miplevel, GL_TEXTURE_HEIGHT, &h);
+    //std::cout << std::endl << temp_->w << ", " << temp_surf->h << std::endl;
+    std::cout << w << ", " << h << std::endl;
+    glBindTexture(GL_TEXTURE_2D,0);
+    */
+
     while (running) {
         // input
         PollEvents(&input,&running);
@@ -951,7 +998,7 @@ static void demo() {
 
         v2i mpos = get_mouse_position();
         glUseProgram(sh_textureProgram);
-        GL_DrawTexture({mpos.x-16,mpos.y-16,32,32},dot_tex);
+        GL_DrawTexture(dot_tex,{mpos.x-16,mpos.y-16,32,32});
         
         /*
           Draft 2
@@ -1048,7 +1095,10 @@ static void demo() {
             glBindBuffer(GL_ARRAY_BUFFER,0);
             glBindVertexArray(0);
         }
-
+        glUseProgram(sh_textureProgram);
+        GL_DrawTexture(gl_textures[PLAYER_TEXTURE],{300,600,200,100});
+        GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
+        
         /*
         SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
         for (i32 n=0; n<dests.size(); n++) {
