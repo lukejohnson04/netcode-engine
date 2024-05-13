@@ -173,11 +173,6 @@ static void server(int port) {
     }
 
 
-    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
-        return;
-    }
-
     // SOCK_STREAM is TCP
     // SOCK_DGRAM is UDP
     int &connect_socket = gl_server.socket;
@@ -217,11 +212,8 @@ static void server(int port) {
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
 
-    initialize_systems("server",false);
-
-    screenSurface = SDL_GetWindowSurface(window);
+    initialize_systems("server",false,false);
     init_textures();
-    m5x7 = TTF_OpenFont("res/m5x7.ttf",16);
 
     bool running=true;
 
@@ -255,6 +247,8 @@ static void server(int port) {
 
     entity_id spectate_player=ID_DONT_EXIST;
     camera_t game_camera;
+
+    draw_shadows=false;
     
     // tick thread
     while (running) {
@@ -266,6 +260,8 @@ static void server(int port) {
 
             if (snap_clock.get() > snap_delta) {
                 PollEvents(&input,&running);
+                glClearColor(0.25f, 0.25f, 0.5f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
                 snap_clock.Restart();
                 // merge command mutex
                 DWORD do_merge_commands = WaitForSingleObject(gl_server._mt_merge_commands,0);
@@ -438,7 +434,10 @@ static void server(int port) {
             }
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
             PollEvents(&input,&running);
-            new_frame_ready=false;
+            glClearColor(0.25f, 0.25f, 0.5f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            new_frame_ready = true;
+
             static int p_connected_last_time=0;
             if (p_connected_last_time != gl_server.gms.connected_players) {
                 new_frame_ready=true;
@@ -469,12 +468,12 @@ static void server(int port) {
             }
 
             if (!gl_server.gms.counting_down_to_game_start) {
-                SDL_Rect dest = {1280/2-(236/2),460,236,36};
+                iRect start_button_dest = {1280/2-(236/2),460,236,36};
                 v2i mpos = get_mouse_position();
                 if (new_frame_ready) {
-                    SDL_RenderCopy(sdl_renderer,textures[TexType::STARTGAME_BUTTON_TEXTURE],NULL,&dest);
+                    GL_DrawTexture(gl_textures[STARTGAME_BUTTON_TEXTURE],start_button_dest);
                 }
-                if (input.mouse_just_pressed && rect_contains_point(*(iRect*)&dest,mpos)) {
+                if (input.mouse_just_pressed && rect_contains_point(start_button_dest,mpos)) {
                     gl_server.gms.game_start_time.QuadPart = gl_server.timer.get_high_res_elapsed().QuadPart + (3 * gl_server.timer.frequency.QuadPart);
 
                     packet_t p = {};
@@ -488,11 +487,12 @@ static void server(int port) {
             
         } else if (gl_server.gms.state == GMS::GAME_HASNT_STARTED) {
         }
-        //printf("%f\n",gl_server.timer.get());
 endof_frame:
+        
         if (new_frame_ready) {
-            SDL_RenderPresent(sdl_renderer);
+            SDL_GL_SwapWindow(window);
         }
+        
         
         // sleep up to next snapshot
         // this is based on snapshots during gameplay but ticks during the menu

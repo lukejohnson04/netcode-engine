@@ -35,6 +35,7 @@
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -226,7 +227,7 @@ static void GameGUIStart() {
     gui_elements.health_text = generate_text(m5x7,"100",{255,0,0,255});
     gui_elements.health_text.scale = {4,4};
     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
-    gui_elements.ability_ui_box.texture = textures[TexType::UI_TEXTURE];
+    gui_elements.ability_ui_box.gl_texture = gl_textures[TexType::UI_TEXTURE];
 
     
     gui_elements.money_text = generate_text(m5x7,"$800",{0,255,100,255});
@@ -235,7 +236,7 @@ static void GameGUIStart() {
     
     for (i32 ind=0;ind<4;ind++) {
         generic_drawable &sprite=gui_elements.ability_sprites[ind];
-        sprite.texture = textures[TexType::ABILITIES_TEXTURE];
+        sprite.gl_texture = gl_textures[TexType::ABILITIES_TEXTURE];
         
         sprite.bound = {ind*48,0,48,48};
         sprite.scale = {1.5f,1.5f};
@@ -450,28 +451,6 @@ static void GameGUIStart() {
                 }
             }
             client_st.last_tick_processed=target_tick;
-            
-            if (player) {
-                if (player->health != p_health_before_update) {
-                    gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
-                    gui_elements.health_text.scale = {4,4};
-                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
-                } if (player->reloading) {
-                    std::string reload_str = std::to_string(player->reload_timer);
-                    if (reload_str.size() > 3) {
-                        reload_str.erase(reload_str.begin()+3,reload_str.end());
-                    }
-                    gui_elements.reload_text = generate_text(m5x7,reload_str,{255,0,0,255});
-                    gui_elements.reload_text.position = player->pos + v2i(16-8,48);
-                    gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
-                }
-                // draw money
-                if (gs.money[player->id] != p_money_before_update) {
-                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
-                    gui_elements.money_text.scale = {4,4};
-                    gui_elements.money_text.position = {16,16};
-                }
-            }
 
             if (o_num != target_tick) {
                 //printf("Tick %d\n",target_tick);
@@ -480,7 +459,6 @@ static void GameGUIStart() {
                     input_send_timer.add(input_send_delta);
                 }
             }
-
             
             if (client_st.loaded_new_map) {
                 client_st.loaded_new_map=false;
@@ -566,12 +544,38 @@ static void GameGUIStart() {
                 printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
 
+            
             if (player) {
                 game_camera.follow = player;
                 game_camera.pos = game_camera.follow->pos;
             } else {
                 game_camera.pos = {1280/2,720/2};
             }
+
+            
+            // DRAW BEGIN
+            if (player) {
+                if (player->health != p_health_before_update) {
+                    gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
+                    gui_elements.health_text.scale = {4,4};
+                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
+                } if (player->reloading) {
+                    std::string reload_str = std::to_string(player->reload_timer);
+                    if (reload_str.size() > 3) {
+                        reload_str.erase(reload_str.begin()+3,reload_str.end());
+                    }
+                    gui_elements.reload_text = generate_text(m5x7,reload_str,{255,0,0,255});
+                    gui_elements.reload_text.position = player->pos + v2i(16-8,48);
+                    gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
+                }
+                // draw money
+                if (gs.money[player->id] != p_money_before_update) {
+                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
+                    gui_elements.money_text.scale = {4,4};
+                    gui_elements.money_text.position = {16,16};
+                }
+            }
+
             render_game_state(player,&game_camera);
             // gui
             SDL_Rect health_rect,money_rect;
@@ -840,7 +844,7 @@ static void GameGUIStart() {
                 }
                 time_to_start = static_cast<double>(client_st.gms.game_start_time.QuadPart - client_st.sync_timer.get_high_res_elapsed().QuadPart)/client_st.sync_timer.frequency.QuadPart;
             }
-        
+
             render_pregame_screen(client_st.gms,time_to_start);
             // render player color selector
             /*SDL_Rect p_rect = {0,0,32,32};
@@ -850,10 +854,9 @@ static void GameGUIStart() {
         }
 
 endof_frame:
-
         SDL_GL_SwapWindow(window);
         
-        SDL_RenderPresent(sdl_renderer);
+        //SDL_RenderPresent(sdl_renderer);
         
         // sleep until next tick
 
@@ -882,7 +885,6 @@ endof_frame:
 static void demo() {
     initialize_systems("Demo",true,false);
 
-    screenSurface = SDL_GetWindowSurface(window);
     init_textures();
 
     bool running=true;
@@ -893,12 +895,42 @@ static void demo() {
     for (i32 n=0;n<4;n++) {
         walls[wall_count++] = {12,n+4};
     }
+    walls[wall_count++] = {0,1};
     walls[wall_count++] = {4,4};
     walls[wall_count++] = {4,5};
     walls[wall_count++] = {6,2};
     walls[wall_count++] = {9,7};
     walls[wall_count++] = {15,9};
 
+    glUseProgram(sh_textureProgram);
+    glUseProgram(0);
+
+
+    GLuint bg_texture;
+    GLuint framebuffer;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    glGenTextures(1,&bg_texture);
+    glBindTexture(GL_TEXTURE_2D,bg_texture);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D,0);
+    
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bg_texture, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "Error! Framebuffer is not complete!" << std::endl;
+    }
+
+    // temporarily flip the projection for the framebuffer since their y axis is flipped automatically 
+
+
+    glUseProgram(sh_colorProgram);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
 
     for (i32 ind=0; ind<wall_count; ind++) {
         
@@ -912,50 +944,20 @@ static void demo() {
         client_sided_render_geometry.segments.push_back({p1,p3});
         client_sided_render_geometry.segments.push_back({p2,p4});
         client_sided_render_geometry.segments.push_back({p3,p4});
+
+        GL_DrawRect({(i32)wall.x*64,(i32)wall.y*64,64,64},COLOR_BLACK);
     }
-
-    float x = 300.0f;
-    float y = 200.0f;
-    float width = 200.0f;
-    float height = 150.0f;
     
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    glDeleteFramebuffers(1,&framebuffer);
+    glBindTexture(GL_TEXTURE_2D,0);
+
     GLuint dot_tex = GL_load_texture("res/flintlock.png");
-
-    sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
-    sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
-
-    glUseProgram(sh_textureProgram);
-    GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
-
-    glUseProgram(sh_colorProgram);
-    GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
-    glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, &projection[0][0]);
-
     clock_t start_time = clock();
 
     GLuint shadow_VAO,shadow_VBO;
     glGenBuffers(1,&shadow_VBO);
     glGenVertexArrays(1,&shadow_VAO);
-    if (false) {
-        /*
-        SDL_Surface *Surface = TTF_RenderText_Blended(m5x7,"testing 123",{255,0,0,255});
-        Surface = SDL_ConvertSurfaceFormat(Surface, SDL_PIXELFORMAT_ARGB8888, 0);
-        
-        glGenTextures(1, &text_tex);
-        glBindTexture(GL_TEXTURE_2D, text_tex);
- 
-        int Mode = GL_RGB;
- 
-        if(Surface->format->BytesPerPixel == 4) {
-            Mode = GL_RGBA;
-        }
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Surface->w, Surface->h, 0, GL_BGRA, GL_UNSIGNED_BYTE, Surface->pixels);
- 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        */
-    }
     generic_drawable text_drawable = generate_text(m5x7,"hello",{255,0,255,255});
     text_drawable.position = {500,500};
     
@@ -975,29 +977,66 @@ static void demo() {
     glBindTexture(GL_TEXTURE_2D,0);
     */
 
+    GLuint test_mask_texture,test_world_texture;
+    glGenTextures(1,&test_mask_texture);
+    glGenTextures(1,&test_world_texture);
+    GL_load_texture(test_mask_texture,"res/test_mask.png");
+
+    /*
+    glBindTexture(GL_TEXTURE_2D,test_world_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D,0);
+    */
+    GLuint test_shadow_texture,test_objects_texture;
+    glGenTextures(1,&test_shadow_texture);
+    glGenTextures(1,&test_objects_texture);
+
+    GL_load_texture_for_framebuffer(test_world_texture);
+    GL_load_texture_for_framebuffer(test_shadow_texture);
+    GL_load_texture_for_framebuffer(test_objects_texture);
+    GLuint test_fb=GL_create_framebuffer(test_world_texture);
+    GLuint shadow_fb=GL_create_framebuffer(test_shadow_texture);
+    GLuint objects_fb=GL_create_framebuffer(test_objects_texture);
+    /*
+    glGenFramebuffers(1,&test_fb);
+    glBindFramebuffer(GL_FRAMEBUFFER,test_fb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, test_world_texture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    */
+
     while (running) {
         // input
         PollEvents(&input,&running);
-        glClearColor(0.25f, 0.25f, 0.5f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glUseProgram(sh_colorProgram);
-
-        // Draw the rectangle
         clock_t curr_time = clock();
         double elapsed = (double)(curr_time - start_time) / CLOCKS_PER_SEC;
         
         double sin_val = (sin(elapsed)+1)/2;
         double cos_val = (cos(elapsed)+1)/2;
         double tan_val = (tan(elapsed)+1)/2;
+        Color clear_col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),255,255);//(u8)(tan_val*255.f),255);
+
+        glBindFramebuffer(GL_FRAMEBUFFER,test_fb);
+        glClearColor(clear_col.r/255.f, clear_col.g/255.f, clear_col.b/255.f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(sh_colorProgram);
+
+        // Draw the rectangle
         
-        FORn(walls,wall_count,wall) {
-            Color col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),255,255);//(u8)(tan_val*255.f),255);
+
+        
+        /*FORn(walls,wall_count,wall) {
             GL_DrawRect({wall->x*64,wall->y*64,64,64},col);
         }
+        */
+        
+        glUseProgram(sh_textureProgram);
+        GL_DrawTextureEx(bg_texture,{0,0,0,0},{0,0,0,0},false,true);
 
 
         v2i mpos = get_mouse_position();
-        glUseProgram(sh_textureProgram);
+        //glUseProgram(sh_textureProgram);
         GL_DrawTexture(dot_tex,{mpos.x-16,mpos.y-16,32,32});
         
         /*
@@ -1075,7 +1114,21 @@ static void demo() {
             return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
         });
 
+        glBindFramebuffer(GL_FRAMEBUFFER,objects_fb);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
+        glUseProgram(sh_textureProgram);
+        GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE], {300,400,64,64}, {0,0,32,32}, false, false, (float)elapsed);//,{300,600,64,64},{0,0,32,32},true);
+        GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
+
+        glBindFramebuffer(GL_FRAMEBUFFER,shadow_fb);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.5f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
         glUseProgram(sh_colorProgram);
+        glUniform4f(glGetUniformLocation(sh_colorProgram,"color"),1.0f,1.0f,1.0f,1.0f);
+        
         for (i32 n=0;n<dests.size();n++) {
             v2i pt=dests[n];
             v2i prev_point=n==0?dests.back():dests[n-1];
@@ -1095,9 +1148,56 @@ static void demo() {
             glBindBuffer(GL_ARRAY_BUFFER,0);
             glBindVertexArray(0);
         }
+
+
+        glBindFramebuffer(GL_FRAMEBUFFER,0);
         glUseProgram(sh_textureProgram);
-        GL_DrawTexture(gl_textures[PLAYER_TEXTURE],{300,600,200,100});
-        GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
+        GL_DrawTextureEx(test_world_texture,{0,0,0,0},{0,0,0,0},false,true);
+
+        glUseProgram(sh_modProgram);
+        GLuint tex1_loc = glGetUniformLocation(sh_modProgram, "_texture1");
+        GLuint tex2_loc = glGetUniformLocation(sh_modProgram, "_texture2");
+        
+        glActiveTexture(GL_TEXTURE0); // Texture unit 0
+        glBindTexture(GL_TEXTURE_2D, test_shadow_texture);
+        glUniform1i(tex1_loc, 0);
+        glActiveTexture(GL_TEXTURE1); // Texture unit 1
+        glBindTexture(GL_TEXTURE_2D, test_objects_texture);
+        glUniform1i(tex2_loc, 1);
+
+        float vertices[] = {
+            0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f,
+            1280.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+            1280.0f, 720.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 720.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
+        };
+        glm::mat4 model = glm::mat4(1.0f);
+        GLint transformLoc = glGetUniformLocation(sh_modProgram,"model");
+        glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+        glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[TEXTURE_VBO]);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        
+        glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(0));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(5 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+
+        glBindBuffer(GL_ARRAY_BUFFER,0);    
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glBindVertexArray(0);
+
+
+
+        //GL_DrawTextureEx(gl_textures[GAME_WORLD_TEXTURE],{0,0,1280,720},{0,0,1280,720},false,true);
+        //GL_DrawTexture(test_mask_texture);
+        
+
+        //glUniformMatrix4fv(glGetUniformLocation(sh_textureProgram, "transform"), 1, GL_FALSE, glm::value_ptr(transform));
         
         /*
         SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);

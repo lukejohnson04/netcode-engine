@@ -15,20 +15,43 @@ enum TexType {
 
     // metagame
     LEVEL_TEXTURE,
-    SHADOW_TEXTURE,
     STATIC_MAP_TEXTURE,
     RAYCAST_DOT_TEXTURE,
-    WORLD_OBJECTS_TEXTURE,
-
+    TX_GAME_WORLD,
+    TX_GAME_OBJECTS,
+    TX_SHADOW,
+    
     TEXTURE_COUNT
 };
 
-GLuint sh_textureProgram, sh_colorProgram;
+enum VaoType {
+    TEXTURE_VAO,
+    SHADOW_VAO,
+    VAO_COUNT
+};
+
+enum VboType {
+    TEXTURE_VBO,
+    SHADOW_VBO,
+    VBO_COUNT
+};
+
+enum FrameBufferType {
+    FB_GAME_WORLD,
+    FB_GAME_OBJECTS,
+    FB_SHADOW,
+    FB_COUNT
+};
+
+
+GLuint sh_textureProgram, sh_colorProgram, sh_modProgram;
 TTF_Font *m5x7=nullptr;
 
 SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
 GLuint gl_textures[TEXTURE_COUNT] = {NULL};
-
+GLuint gl_varrays[VAO_COUNT] = {NULL};
+GLuint gl_vbuffers[VBO_COUNT] = {NULL};
+GLuint gl_framebuffers[FB_COUNT] = {NULL};
 
 std::string readShaderFile(const std::string &shaderPath) {
     std::ifstream shaderFile;
@@ -130,8 +153,26 @@ internal void GL_load_texture(GLuint tex, const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 }
 
+
+
+internal GLuint GL_create_framebuffer(GLuint texture) {
+    GLuint fb;
+    glGenFramebuffers(1,&fb);
+    glBindFramebuffer(GL_FRAMEBUFFER,fb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    return fb;
+}
+
+internal void GL_load_texture_for_framebuffer(GLuint texture) {
+    glBindTexture(GL_TEXTURE_2D,texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D,0);
+}
+
 internal void GL_load_texture_from_surface(GLuint tex,SDL_Surface *tex_surf) {
-    std::cout << "Surface format: " << SDL_GetPixelFormatName(tex_surf->format->format) << std::endl;
     GLenum format = 0, type = GL_UNSIGNED_BYTE; // Default to unsigned byte for type
 
     switch (tex_surf->format->format) {
@@ -175,7 +216,6 @@ internal void GL_load_texture_from_surface(GLuint tex,SDL_Surface *tex_surf) {
         return;
     }
 
-    std::cout << "Loading texture from surface of dimensions " << tex_surf->w << ", " << tex_surf->h << std::endl;
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -197,8 +237,41 @@ internal GLuint GL_load_texture(const char* path) {
 static void init_textures() {
     sh_textureProgram = createShaderProgram("../src/sh_texture.vert","../src/sh_texture.frag");
     sh_colorProgram = createShaderProgram("../src/sh_color.vert","../src/sh_color.frag");
+    sh_modProgram = createShaderProgram("../src/sh_mod.vert","../src/sh_mod.frag");
 
+    glUseProgram(sh_textureProgram);
+    GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+    GLuint tintLoc_col = glGetUniformLocation(sh_textureProgram, "colorMod");
+    glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
+
+    glUseProgram(sh_colorProgram);
+    GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
+    glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, glm::value_ptr(projection));
+    
+    glUseProgram(sh_modProgram);
+    GLuint projLoc_mod = glGetUniformLocation(sh_modProgram, "projection");
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+    GLuint modelLoc_mod = glGetUniformLocation(sh_modProgram, "model");
+    glm::mat4 model = glm::mat4(1.0f);
+    glUniformMatrix4fv(modelLoc_mod, 1, GL_FALSE, glm::value_ptr(model));
+    
     glGenTextures(TEXTURE_COUNT,gl_textures);
+    glGenVertexArrays(VAO_COUNT,gl_varrays);
+    glGenBuffers(VBO_COUNT,gl_vbuffers);
+    glGenFramebuffers(FB_COUNT,gl_framebuffers);
+
+    // shadow mask frame buffer
+    GL_load_texture_for_framebuffer(gl_textures[TX_GAME_OBJECTS]);
+    GL_load_texture_for_framebuffer(gl_textures[TX_GAME_WORLD]);
+    GL_load_texture_for_framebuffer(gl_textures[TX_SHADOW]);
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_SHADOW]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_SHADOW], 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_OBJECTS]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_GAME_OBJECTS], 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_GAME_WORLD], 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
 
     GL_load_texture(gl_textures[PLAYER_TEXTURE],"res/charas.png");    
     GL_load_texture(gl_textures[BULLET_TEXTURE],"res/bullet.png");    
@@ -229,6 +302,9 @@ static void init_textures() {
     SDL_SetRenderTarget(renderer,NULL);
     */
 
+    // VAOs
+
+    
     for(i32 ind=0;ind<TEXTURE_COUNT;ind++) {
         if (gl_textures[ind] == NULL) {
             printf("WARNING: texture with ID %d is not loaded\n",ind);
@@ -328,19 +404,21 @@ struct generic_drawable {
     }
 };
 
-generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255,255,255,255}) {
+generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255,255,255,255},GLuint tex=NULL) {
     generic_drawable res;
     
     SDL_Surface* temp_surface =
         TTF_RenderText_Solid(font, str.c_str(), col);
     temp_surface = SDL_ConvertSurfaceFormat(temp_surface, SDL_PIXELFORMAT_ARGB8888, 0);
 
-    if (res.gl_texture == NULL) {
-        glGenTextures(1,&res.gl_texture);
+    if (tex != NULL) {
+        glDeleteTextures(1,&tex);
     }
+    glGenTextures(1,&tex);
+
+    res.gl_texture = tex;
     GL_load_texture_from_surface(res.gl_texture,temp_surface);
-    
-    
+        
     SDL_FreeSurface(temp_surface);
     return res;
 }
@@ -404,12 +482,6 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
     glUniform4f(colUni, colorF[0],colorF[1],colorF[2],colorF[3]);
 
     // we don't have to repass the projection every frame, unless it changes
-    /*
-    GLuint projLoc_col = glGetUniformLocation(sh_colorProgram, "projection");
-    glUniformMatrix4fv(projLoc_col, 1, GL_FALSE, &projection[0][0]);
-    */
-
-
     local_persist GLuint VAO,VBO;
     local_persist bool generated=false;
     if (!generated) {
@@ -430,48 +502,125 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
 }
 
 
+void GL_DrawTexture(GLuint texture, iRect dest={0,0,0,0}, iRect src={0,0,0,0}) {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,texture);
 
+    float u1 = 0.0f;
+    float u2 = 1.0f;
+    float v1 = 0.0f;
+    float v2 = 1.0f;
 
-void GL_DrawTexture(GLuint texture, iRect rect) {
-    float vertices[] = {
-        (float)rect.x,           (float)rect.y,        0.0f, 0.0f, 0.0f,
-        (float)rect.x+rect.w,    (float)rect.y,        0.0f, 1.0f, 0.0f,
-        (float)rect.x+rect.w,    (float)rect.y+rect.h, 0.0f, 1.0f, 1.0f,
-        (float)rect.x,           (float)rect.y+rect.h, 0.0f, 0.0f, 1.0f,
-    };
-    
-    local_persist GLuint VAO,VBO;
-    local_persist bool generated=false;
-
-    if (!generated) {
-        glGenVertexArrays(1, &VAO);
-        glGenBuffers(1, &VBO);
-        generated=true;
+    v2i tex_size = {0,0};
+    if (dest.w==0 || src.w!=0) {
+        // store this info in some data structure maybe?
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tex_size.x);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &tex_size.y);
+        if (src.w!=0) {
+            u1 = (float)src.x / (float)tex_size.x;
+            u2 = (float)(src.x + src.w) / (float)tex_size.x;
+            v1 = (float)src.y / (float)tex_size.y;
+            v2 = (float)(src.y + src.h) / (float)tex_size.y;
+        }
+    } if (dest.w==0) {
+        dest.w = tex_size.x;
+        dest.h = tex_size.y;
     }
     
-    glBindVertexArray(VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    float vertices[] = {
+        (float)dest.x,           (float)dest.y,        0.0f, u1, v1,
+        (float)dest.x+dest.w,    (float)dest.y,        0.0f, u2, v1,
+        (float)dest.x+dest.w,    (float)dest.y+dest.h, 0.0f, u2, v2,
+        (float)dest.x,           (float)dest.y+dest.h, 0.0f, u1, v2,
+    };
+    
+    // uniforms
+    GLint textureLoc = glGetUniformLocation(sh_textureProgram,"_texture");
+    glUniform1i(textureLoc,0);    
+    glm::mat4 model = glm::mat4(1.0f);
+    GLint transformLoc = glGetUniformLocation(sh_textureProgram,"model");
+    glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));    
+    
+    glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[TEXTURE_VBO]);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
+    glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindBuffer(GL_ARRAY_BUFFER,0);    
     
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glBindVertexArray(0);
+}
+
+void GL_DrawTextureEx(GLuint texture, iRect dest={0,0,0,0}, iRect src={0,0,0,0}, bool flip_x=false, bool flip_y=false, float rotation=0) {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,texture);
+
+    float u1= !flip_x ? 0.0f : 1.0f;
+    float u2= !flip_x ? 1.0f : 0.0f;
+    float v1= !flip_y ? 0.0f : 1.0f;
+    float v2= !flip_y ? 1.0f : 0.0f;
+
+    v2i tex_size = {0,0};
+    if (dest.w==0 || src.w!=0) {
+        // store this info in some data structure maybe?
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tex_size.x);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &tex_size.y);
+        if (src.w!=0) {
+            (flip_x ? u2 : u1) = (float)src.x / (float)tex_size.x;
+            (flip_x ? u1 : u2) = (float)(src.x + src.w) / (float)tex_size.x;
+            (flip_y ? v2 : v1) = (float)src.y / (float)tex_size.y;
+            (flip_y ? v1 : v2) = (float)(src.y + src.h) / (float)tex_size.y;
+        }
+    } if (dest.w==0) {
+        dest.w = tex_size.x;
+        dest.h = tex_size.y;
+    }
+    
+    float vertices[] = {
+        (float)dest.x,           (float)dest.y,        0.0f, u1, v1,
+        (float)dest.x+dest.w,    (float)dest.y,        0.0f, u2, v1,
+        (float)dest.x+dest.w,    (float)dest.y+dest.h, 0.0f, u2, v2,
+        (float)dest.x,           (float)dest.y+dest.h, 0.0f, u1, v2,
+    };
+        
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[TEXTURE_VBO]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    // uniforms
     GLint textureLoc = glGetUniformLocation(sh_textureProgram,"_texture");
     glUniform1i(textureLoc,0);
     
-    // position
+    glm::mat4 model = glm::mat4(1.0f);
+    if (rotation != 0) {
+        glm::vec2 pos = glm::vec2(dest.x, dest.y);
+        float angleRadians = rotation;
+        // Calculate the center of the object for rotation
+        glm::vec2 size = glm::vec2(dest.w,dest.h);
+        glm::vec2 center = pos + size * 0.5f;
+        model = glm::translate(model, glm::vec3(center, 0.0f)); // Move pivot to center
+        model = glm::rotate(model, angleRadians, glm::vec3(0.0f, 0.0f, 1.0f)); // Rotate
+        model = glm::translate(model, glm::vec3(-center, 0.0f)); // Move pivot back
+    }
+    
+    GLint transformLoc = glGetUniformLocation(sh_textureProgram,"model");
+    glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
+    glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+
+    glBindVertexArray(gl_varrays[TEXTURE_VAO]);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(0));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindBuffer(GL_ARRAY_BUFFER,0);
-    glBindVertexArray(0);    
-
-    glBindVertexArray(VAO);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D,texture);
-    //GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
-    //glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
-
     
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER,0);
+    model = glm::mat4(1.0f);
+    glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
 }
