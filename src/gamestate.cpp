@@ -90,6 +90,11 @@ enum GMS {
     GAMESTATE_COUNT
 };
 
+enum GAME_MODE {
+    GAME_MODE_NONE,
+    GAME_MODE_STRIKE,
+    GAME_MODE_JOSHFARE
+};
 
 // the reason this struct is 100% SEPARATE from game_state is because we don't want
 // to worry about these details when writing generic update code for the game.
@@ -97,6 +102,7 @@ enum GMS {
 struct overall_game_manager {
     i32 connected_players=0;
     GMS state=GAME_HASNT_STARTED;
+    GAME_MODE gmode= GAME_MODE_NONE;
     
     int round_end_tick=-1;
 
@@ -145,77 +151,6 @@ static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
     bullet.shooter_id = shooter_id;
 }
 
-
-/*static void rewind_game_state(game_state &gst, netstate_info_t &c, double target_time) {
-    for (i32 ind=(i32)c.snapshots.size()-1;ind>=0;ind--) {
-        if (c.snapshots[ind].time<=target_time) {
-            gst = c.snapshots[ind];
-            gst.update(c,target_time);
-            return;
-        }
-    }
-    printf("ERROR: Cannot rewind game state!\n");
-}
-*/
-/*
-void load_gamestate_for_round(overall_game_manager &gms) {
-    gms.state = ROUND_PLAYING;
-    i32 rand_level = rand() % 4;    
-    SDL_Surface *level_surface = IMG_Load("res/levels.png");
-
-    gs.bullet_count=0;
-    gs.wall_count=0;
-    gs.one_remaining_tick=0;
-
-
-    i32 spawn_count=0;
-    v2i spawns[8]={{0,0}};
-    
-    for (i32 x=0; x<20; x++) {
-        for (i32 y=0; y<12; y++) {
-            Color col = {0,0,0,0};
-            Uint32 data = getpixel(level_surface, x+(20*rand_level),y);
-            SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
-            if (col == Color(0,0,0,255)) {
-                add_wall({x,y});
-            } else if (col == Color(255,0,0,255)) {
-                spawns[spawn_count++] = {x,y};
-            }
-        }
-    }
-
-    bool create_all_charas = gs.player_count == gms.connected_players ? false : true;
-    gs.player_count=0;
-
-    for (i32 ind=0; ind<gms.connected_players; ind++) {
-        if (create_all_charas == false) {
-            character old_chara = gs.players[ind];
-            
-            add_player();
-            gs.players[ind] = create_player({0,0},old_chara.id);
-            gs.players[ind].color = old_chara.color;
-        } else {
-            add_player();
-        
-            int total_color_points=rand() % 255 + (255+200);
-            gs.players[gs.player_count-1].color.r = rand()%MIN(255,total_color_points);
-            total_color_points-=gs.players[gs.player_count-1].color.r;
-            gs.players[gs.player_count-1].color.g = rand()%MIN(255,total_color_points);
-            total_color_points-=gs.players[gs.player_count-1].color.g;
-            gs.players[gs.player_count-1].color.b = total_color_points;
-        }
-        i32 rand_spawn = rand() % spawn_count;
-        gs.players[ind].pos = spawns[rand_spawn]*64;
-        spawns[rand_spawn] = spawns[spawn_count-1];
-        spawn_count--;
-    }
-
-    SDL_FreeSurface(level_surface);
-
-    // start in 5 seconds
-    gs.round_start_tick = gs.tick + 300;
-}
-*/
 
 enum {
     MAP_DE_DUST2,
@@ -269,33 +204,8 @@ void load_permanent_data_from_map(i32 map) {
             } else {
                 mp.tiles[x][y] = TT_GROUND;
             }
-
-            /*
-            iRect dest,src;
-            src = {0,0,16,16};
-            dest = {x*64,y*64,64,64};
-            u8 type = mp.tiles[x][y];
-            if (type == TT_WALL) {
-                src={16,0,16,16};
-            } else if (type == TT_BOMBSITE) {
-                src={32,0,16,16};
-            } else if (type == TT_A) {
-                src={32,16,16,16};
-            } else if (type == TT_AA) {
-                src={32,32,16,16};
-            } else if (type == TT_ARROW_UPLEFT) {
-                src={48,16,16,16};
-            } else if (type == TT_ARROW_UPRIGHT) {
-                src={48,32,16,16};
-            } else {
-                src={16,16,16,16};
-            }
-
-            GL_DrawTexture(gl_textures[TILE_TEXTURE],dest,src);
-            */
         }
     }
-    //glBindFramebuffer(GL_FRAMEBUFFER,0);
     SDL_FreeSurface(level_surface);
     mp.static_texture_generated=false;    
 }
@@ -362,68 +272,6 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
     gs.round_start_tick = gs.tick + 1;
     gs.buytime_end_tick = gs.round_start_tick + (BUYTIME_LENGTH * 60);
 }
-
-/*
-void load_gamestate_for_round(overall_game_manager &gms) {
-    gms.state = GMS::GAME_PLAYING;
-    SDL_Surface *level_surface = IMG_Load("res/map.png");
-
-    gs.bullet_count=0;
-    mp.wall_count=0;
-    gs.one_remaining_tick=0;
-    gs.bombsite_count=0;
-    gs.bomb_planted_tick=0;
-
-    i32 spawn_count=0;
-    v2i spawns[8]={{0,0}};
-    
-    for (i32 x=0; x<32; x++) {
-        for (i32 y=0; y<32; y++) {
-            Color col = {0,0,0,0};
-            Uint32 data = getpixel(level_surface, x,y);
-            SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
-            if (col == Color(0,0,0,255)) {
-                add_wall({x,y});
-            } else if (col == Color(255,0,0,255)) {
-                spawns[spawn_count++] = {x,y};
-            } else if (col == Color(0,0,255,255)) {
-                gs.bombsite[gs.bombsite_count++] = {x,y};
-            }
-        }
-    }
-
-    bool create_all_charas = gs.player_count == gms.connected_players ? false : true;
-    gs.player_count=0;
-
-    for (i32 ind=0; ind<gms.connected_players; ind++) {
-        if (create_all_charas == false) {
-            character old_chara = gs.players[ind];
-            
-            add_player();
-            gs.players[ind] = create_player({0,0},old_chara.id);
-            gs.players[ind].color = old_chara.color;
-        } else {
-            add_player();
-        
-            int total_color_points=rand() % 255 + (255+200);
-            gs.players[gs.player_count-1].color.r = rand()%MIN(255,total_color_points);
-            total_color_points-=gs.players[gs.player_count-1].color.r;
-            gs.players[gs.player_count-1].color.g = rand()%MIN(255,total_color_points);
-            total_color_points-=gs.players[gs.player_count-1].color.g;
-            gs.players[gs.player_count-1].color.b = total_color_points;
-        }
-        i32 rand_spawn = rand() % spawn_count;
-        gs.players[ind].pos = spawns[rand_spawn]*64;
-        spawns[rand_spawn] = spawns[spawn_count-1];
-        spawn_count--;
-    }
-
-    SDL_FreeSurface(level_surface);
-
-    // start in 5 seconds
-    gs.round_start_tick = gs.tick + 300;
-}
-*/
 
 internal void on_bomb_plant_finished(entity_id id, i32 tick) {
     gs.bomb_planted_tick = tick;
@@ -501,48 +349,6 @@ void game_state::update(netstate_info_t &c, double delta) {
             process_command(&players[node.cmd.sending_id],node.cmd);
         }
     }
-
-    /*
-#ifdef GAME_CAN_END
-    if (c.authoritative) {
-        if (one_remaining_tick==0) {
-            i32 living_player_count=0;
-            character *last_alive=nullptr;
-            FORn(players,gs.player_count,player) {
-                if (player->curr_state!=character::DEAD) {
-                    living_player_count++;
-                    last_alive=player;
-                    if (living_player_count>1) {
-                        break;
-                    }
-                }
-            }
-            if (living_player_count==1) {
-                one_remaining_tick=tick;
-                score[last_alive->id]++;
-            }
-        } else if (tick >= one_remaining_tick) {
-            if (tick >= one_remaining_tick+90+180) {
-                // gamestate win
-                character *last_alive=nullptr;
-                FORn(players,player_count,player){
-                    if (player->curr_state!=character::DEAD) {
-                        last_alive=player;
-                        break;
-                    }
-                }
-                if (last_alive==nullptr) {
-                    // error
-                    printf("ERROR: Game ended in a tie!\n");
-                } else {
-                    gamestate_load_map(c.gms,MAP_DE_DUST2);
-                    //load_gamestate_for_round(c.gms);
-                }
-            }
-        }
-    }
-#endif
-    */
 
     i32 planted_before_tick = bomb_planted;
     i32 defused_before_tick = bomb_defused;
@@ -893,30 +699,6 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         detonation_timer.position = {1280/2-detonation_timer.get_draw_irect().w/2,24};
         GL_DrawTexture(detonation_timer.gl_texture,detonation_timer.get_draw_irect());
     }
-
-    /*
-    */
-    
-    /*
-    if (gs.tick<gs.round_start_tick+90) {
-        // display a countdown
-        double time_until_start = (gs.round_start_tick-gs.tick) * (1.0/60.0);
-
-        std::string timer_str;
-        generic_drawable round_start_timer;
-        v2 scale = {16,16};
-        if (time_until_start > 0) {
-            timer_str = std::to_string((int)ceil(time_until_start));
-            scale = v2(12,12)*(time_until_start-floor(time_until_start)) + v2(4,4);
-        } else {
-            timer_str = "GO!";
-        }
-        round_start_timer = generate_text(sdl_renderer,m5x7,timer_str,{255,0,0,255});
-        round_start_timer.scale = scale;
-        round_start_timer.position = {1280/2-round_start_timer.get_draw_rect().w/2,720/2-round_start_timer.get_draw_rect().h/2};
-        SDL_RenderCopy(sdl_renderer,round_start_timer.texture,NULL,&round_start_timer.get_draw_rect());
-    }
-    */
 
 }
 

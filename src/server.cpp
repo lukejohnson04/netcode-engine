@@ -93,11 +93,6 @@ DWORD WINAPI ServerListen(LPVOID lpParamater) {
 
             gl_server.gms.connected_players++;
 
-            if (gl_server.gms.state == GMS::GAME_HASNT_STARTED) {
-                gl_server.gms.state = PREGAME_SCREEN;
-                printf("set to pregame screen\n");
-            }
-
             packet_t initial_info_on_connection = {};
             initial_info_on_connection.type = INFO_DUMP_ON_CONNECTED;
             initial_info_on_connection.data.info_dump_on_connected.client_count = gl_server.gms.connected_players;
@@ -227,7 +222,7 @@ static void server(int port) {
 
     gl_server.last_tick=0;
     gl_server.NetState.authoritative=true;
-    gl_server.gms.state = GAME_HASNT_STARTED;
+    gl_server.gms.state = PREGAME_SCREEN;
 
     // TODO: figure out input bufffer/whether the server should update and send information with
     // a built in latency or not
@@ -347,24 +342,6 @@ static void server(int port) {
                     }
 
 
-                    /*
-                    // NOTE: add snapshot
-                    packet_t p = {};
-                    p.type = SNAPSHOT_TRANSIENT_DATA;
-                    p.data.snapshot.gms = gs;
-                    // last processed command data
-                    for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
-                        p.data.snapshot.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
-                    }
-
-                    broadcast(&p);
-                    */
-                    
-                    
-                    // send the last 6 ticks worth of snapshots
-                    // that way the server doesn't need to buffer any snapshots, and the client just overwrites
-                    // the latest snapshots they have with the one from the server
-
                     // send important command data
                     packet_t p = {};
                     p.type = COMMAND_CALLBACK_INFO;
@@ -436,13 +413,13 @@ static void server(int port) {
             PollEvents(&input,&running);
             glClearColor(0.25f, 0.25f, 0.5f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            new_frame_ready = true;
+            new_frame_ready=true;
 
             static int p_connected_last_time=0;
             if (p_connected_last_time != gl_server.gms.connected_players) {
                 new_frame_ready=true;
                 p_connected_last_time = gl_server.gms.connected_players;
-            } 
+            }
             // if the clock runs out, start the game
             if (gl_server.gms.counting_down_to_game_start) {
                 new_frame_ready=true;
@@ -491,6 +468,7 @@ endof_frame:
         
         if (new_frame_ready) {
             SDL_GL_SwapWindow(window);
+            new_frame_ready=false;
         }
         
         
@@ -507,6 +485,8 @@ endof_frame:
             if (len > 0) {
                 SDL_Delay(u32(len*1000.0));
             }
+        } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
+            SDL_Delay(16);
         }
     }
     closesocket(gl_server.socket);

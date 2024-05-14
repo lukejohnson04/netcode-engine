@@ -133,6 +133,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
         std::cout << "OPENGL ERROR: " << error << std::endl;
     }
 
+    SDL_GL_SetSwapInterval(vsync ? 1 : 0);
     screenSurface = SDL_GetWindowSurface(window);
 }
 
@@ -184,7 +185,7 @@ static void GameGUIStart() {
     
     char winstr[] = "Client x";
     winstr[7] = (char)client_st.client_id + '0';
-    initialize_systems(winstr,false);
+    initialize_systems(winstr,true);
 
     if (window == nullptr) {
         printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
@@ -883,16 +884,6 @@ endof_frame:
         // sleep until next tick
 
         // when you don't sleep, it works fine?!?!
-        /*
-        if (client_st.gms.state == GMS::ROUND_PLAYING) {
-            double time_to_next_tick=client_st.get_time_to_next_tick();
-            DWORD sleep_time = (DWORD)(time_to_next_tick*1000);
-            if (sleep_time > 3) {
-                printf("%d\n",sleep_time);
-                SDL_Delay(sleep_time);
-            }
-        }
-        */
         
     }
     

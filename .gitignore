@@ -1,2 +1,5 @@
 build/.vs/
 cloc-1.98.exe
+.git
+build/build.rar
+.pdb
