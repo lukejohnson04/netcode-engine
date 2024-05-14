@@ -297,7 +297,7 @@ static void server(int port) {
                         }
                         find_and_load_gamestate_snapshot(gs,gl_server.NetState,earliest_new_cmd_tick);
                         // NOTE: check if we can comment this out
-                        load_game_state_up_to_tick(gs,gl_server.NetState,tick_before);
+                        load_game_state_up_to_tick((void*)&gs,gl_server.NetState,tick_before);
                     }
                     
             command_merge_finish:
@@ -306,7 +306,7 @@ static void server(int port) {
                 
                 
                 if (target_tick-snapshot_buffer >= 0) {
-                    load_game_state_up_to_tick(gs,gl_server.NetState,target_tick-snapshot_buffer);
+                    load_game_state_up_to_tick((void*)&gs,gl_server.NetState,target_tick-snapshot_buffer);
 
                     {
                         snapshot_t snap = {};
@@ -334,7 +334,7 @@ static void server(int port) {
                             if (update_tick<gs.tick) {
                                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,update_tick);
                             }
-                            load_game_state_up_to_tick(gs,gl_server.NetState,update_tick,true);
+                            load_game_state_up_to_tick((void*)&gs,gl_server.NetState,update_tick,true);
                             p.data.snapshot.gms = gs;
                         }
                         p.data.snapshot.last_processed_command_tick[client_id] = last_proc_command;
@@ -457,6 +457,7 @@ static void server(int port) {
                     p.type = GAME_START_ANNOUNCEMENT;
                     p.data.game_start_info.start_time = gl_server.gms.game_start_time;
                     p.data.game_start_info.map_id = MAP_DE_DUST2;
+                    p.data.game_start_info.gmode = gl_server.gms.gmode;
                     broadcast(&p);
                     gl_server.gms.counting_down_to_game_start=true;
                 }
@@ -477,6 +478,8 @@ static void server(int port) {
                     n_str = "JoshStrike";
                 else if (gl_server.gms.gmode == GAME_MODE_JOSHFARE)
                     n_str = "JoshFare";
+                else if (gl_server.gms.gmode == GAME_MODE_JOSHUAGAME)
+                    n_str = "Joshua Game";
                 game_mode_text = generate_text(m5x7,n_str,COLOR_WHITE,game_mode_text.gl_texture);
                 game_mode_text.scale = {2,2};
                 game_mode_text.position = {WINDOW_WIDTH/2-game_mode_text.get_draw_irect().w/2, 450};

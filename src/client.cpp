@@ -94,7 +94,11 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         } else if (pc.type == GAME_START_ANNOUNCEMENT) {
             client_st.gms.game_start_time = pc.data.game_start_info.start_time;
             client_st.gms.counting_down_to_game_start=true;
-            load_permanent_data_from_map(pc.data.game_start_info.map_id);
+            client_st.gms.gmode = pc.data.game_start_info.gmode;
+            // start game protocol for client
+            if (client_st.gms.gmode == GAME_MODE_STRIKE) {
+                load_permanent_data_from_map(pc.data.game_start_info.map_id);
+            }
             client_st.loaded_new_map=true;
 
         } else if (pc.type == CHAT_MESSAGE) {

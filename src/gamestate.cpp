@@ -21,7 +21,8 @@ enum ROUND_STATE {
     ROUND_STATE_COUNT
 };
 
-struct map_t {
+
+struct _strike_map_t {
     i32 wall_count=0;
     v2i walls[512];
 
@@ -32,7 +33,10 @@ struct map_t {
 
     i32 spawn_counts[TEAM_COUNT];
     v2i spawns[TEAM_COUNT][32];
-    bool static_texture_generated=false;
+
+    void add_wall(v2i pos) {
+        walls[wall_count++] = pos;
+    }
 };
 
 // should be called world state instead of game state
@@ -71,10 +75,13 @@ struct game_state {
     i32 money[MAX_PLAYERS]={0};
 
     void update(netstate_info_t &c, double delta);
+    void add_bullet(v2 pos, float rot, entity_id shooter_id) {
+        bullet_t &bullet = bullets[bullet_count++];
+        bullet.position = pos;
+        bullet.vel = convert_angle_to_vec(rot)*600.f;
+        bullet.shooter_id = shooter_id;
+    }
 };
-
-constexpr i32 game_state_permanent_data_size = offsetof(game_state, player_count);
-constexpr i32 game_state_transient_data_size = sizeof(game_state) - game_state_permanent_data_size;
 
 struct snapshot_t {
     game_state gms;
@@ -93,6 +100,7 @@ enum GMS {
 enum GAME_MODE {
     GAME_MODE_STRIKE,
     GAME_MODE_JOSHFARE,
+    GAME_MODE_JOSHUAGAME,
     GAME_MODE_COUNT,
 };
 
@@ -103,7 +111,7 @@ struct overall_game_manager {
     i32 connected_players=0;
     GMS state=GAME_HASNT_STARTED;
     GAME_MODE gmode= GAME_MODE_STRIKE;
-    
+
     int round_end_tick=-1;
 
     LARGE_INTEGER game_start_time;
@@ -118,7 +126,6 @@ struct command_node {
 
 // bridge between gamestate and network
 struct netstate_info_t {
-    // fuck it
     std::vector<command_node> command_stack;    
     std::vector<snapshot_t> snapshots;
     
@@ -131,17 +138,25 @@ struct netstate_info_t {
 };
 
 
+global_variable void* transient_game_state;
+global_variable void* permanent_game_state;
+
 global_variable game_state gs;
-global_variable map_t mp;
+global_variable _strike_map_t mp;
 
 
-static void add_player() {
-    entity_id id = (entity_id)(gs.player_count++);
-    gs.players[id] = create_player({0,0},id);
+static void add_player(character* players, i32 *player_count) {
+    entity_id id = (entity_id)((*player_count)++);
+    players[id] = create_player({0,0},id);
 }
 
-static void add_wall(v2i wall) {
-    mp.walls[mp.wall_count++] = wall;
+
+
+static void add_bullet(bullet_t *bullets, i32 *bullet_count, v2 pos, float rot, entity_id shooter_id) {
+    bullet_t &bullet = bullets[(*bullet_count)++];
+    bullet.position = pos;
+    bullet.vel = convert_angle_to_vec(rot)*600.f;
+    bullet.shooter_id = shooter_id;
 }
 
 static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
@@ -150,7 +165,6 @@ static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
     bullet.vel = convert_angle_to_vec(rot)*600.f;
     bullet.shooter_id = shooter_id;
 }
-
 
 enum {
     MAP_DE_DUST2,
@@ -182,7 +196,7 @@ void load_permanent_data_from_map(i32 map) {
             Uint32 data = getpixel(level_surface, x,y);
             SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
             if (col == Color(0,0,0,255)) {
-                add_wall({x,y});
+                mp.add_wall({x,y});
                 mp.tiles[x][y] = TT_WALL;
             } else if (col == Color(255,0,0,255)) {
                 t_spawns[t_spawn_count++] = {x,y};
@@ -207,7 +221,6 @@ void load_permanent_data_from_map(i32 map) {
         }
     }
     SDL_FreeSurface(level_surface);
-    mp.static_texture_generated=false;    
 }
 
 void gamestate_load_map(overall_game_manager &gms, i32 map) {
@@ -237,11 +250,11 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
         if (create_all_charas == false) {
             character old_chara = gs.players[ind];
             
-            add_player();
+            add_player(gs.players,&gs.player_count);
             gs.players[ind] = create_player({0,0},old_chara.id);
             gs.players[ind].color = old_chara.color;
         } else {
-            add_player();
+            add_player(gs.players,&gs.player_count);
         
             int total_color_points=rand() % 255 + (255+200);
             gs.players[gs.player_count-1].color.r = (u8)(rand()%MIN(255,total_color_points));
@@ -736,7 +749,7 @@ void render_pregame_screen(overall_game_manager &gms, double time_to_start) {
 }
 
 // loads the first snapshot found before the input time
-void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int start_tick) {
+internal void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int start_tick) {
     for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
         if (c.snapshots[ind].gms.tick<=start_tick) {
             gst = c.snapshots[ind].gms;
@@ -746,7 +759,8 @@ void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int s
     printf("ERROR: Couldn't find snapshot to rewind to %d!\n",start_tick);
 }
 
-void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_tick, bool overwrite_snapshots=true) {
+internal void load_game_state_up_to_tick(void* temp_game_state_data, netstate_info_t &c, int target_tick, bool overwrite_snapshots=true) {
+    game_state &gst = *(game_state*)temp_game_state_data;
     while(gst.tick<target_tick) {
         // should this be before or after???
         // after i think because this function shouldn't have to worry about previous ticks

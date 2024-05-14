@@ -71,6 +71,7 @@ struct packet_t {
         struct {
             LARGE_INTEGER start_time;
             i32 map_id;
+            GAME_MODE gmode;
         } game_start_info;
         
         overall_game_manager gms;

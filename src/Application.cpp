@@ -175,6 +175,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #define MAX_CLIENTS 16
 
 #include "gamestate.cpp"
+#include "gm_strike.cpp"
 #include "network.cpp"
 #include "server.cpp"
 #include "client.cpp"
@@ -248,6 +249,9 @@ static void GameGUIStart() {
 
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
+
+    transient_game_state = (void*)&gs;
+    permanent_game_state = (void*)&mp;
     
     while (running) {
         // input
