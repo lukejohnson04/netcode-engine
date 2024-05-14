@@ -444,9 +444,9 @@ static void server(int port) {
                 render_pregame_screen(gl_server.gms,time_to_start);
             }
 
+            v2i mpos = get_mouse_position();
             if (!gl_server.gms.counting_down_to_game_start) {
-                iRect start_button_dest = {1280/2-(236/2),460,236,36};
-                v2i mpos = get_mouse_position();
+                iRect start_button_dest = {1280/2-(236/2),560,236,36};
                 if (new_frame_ready) {
                     GL_DrawTexture(gl_textures[STARTGAME_BUTTON_TEXTURE],start_button_dest);
                 }
@@ -461,7 +461,54 @@ static void server(int port) {
                     gl_server.gms.counting_down_to_game_start=true;
                 }
             }
+
+            // draw selector
+            local_persist generic_drawable game_mode_text;
+            local_persist bool generated=false;
             
+            iRect l_arrow_src = {16,0,16,16};
+            iRect r_arrow_src = {16,0,16,16};
+
+
+            if (!generated) {
+                generated=true;
+                std::string n_str="UndefinedGameMode";
+                if (gl_server.gms.gmode == GAME_MODE_STRIKE)
+                    n_str = "JoshStrike";
+                else if (gl_server.gms.gmode == GAME_MODE_JOSHFARE)
+                    n_str = "JoshFare";
+                game_mode_text = generate_text(m5x7,n_str,COLOR_WHITE,game_mode_text.gl_texture);
+                game_mode_text.scale = {2,2};
+                game_mode_text.position = {WINDOW_WIDTH/2-game_mode_text.get_draw_irect().w/2, 450};
+            }
+
+            glUseProgram(sh_textureProgram);
+            GL_DrawTexture(game_mode_text.gl_texture,game_mode_text.get_draw_irect());
+
+            if (!gl_server.gms.counting_down_to_game_start) {            
+                iRect left_arrow_rect = {game_mode_text.position.x - 20 - 32, game_mode_text.position.y + 16, 32,32};
+                iRect right_arrow_rect = {game_mode_text.position.x + game_mode_text.get_draw_irect().w + 20, game_mode_text.position.y + 16, 32,32};
+                if (rect_contains_point(left_arrow_rect,mpos)) {
+                    l_arrow_src.x+=16;
+                    if (input.mouse_just_pressed) {
+                        gl_server.gms.gmode=(GAME_MODE)((i32)gl_server.gms.gmode-1);
+                        if (gl_server.gms.gmode < 0) gl_server.gms.gmode = (GAME_MODE)(GAME_MODE_COUNT-1);
+                        generated=false;
+                    }
+                }
+
+                if (rect_contains_point(right_arrow_rect,mpos)) {
+                    r_arrow_src.x+=16;
+                    if (input.mouse_just_pressed) {
+                        gl_server.gms.gmode = (GAME_MODE)((i32)gl_server.gms.gmode+1);
+                        if (gl_server.gms.gmode >= GAME_MODE_COUNT) gl_server.gms.gmode=(GAME_MODE)0;
+                        generated=false;
+                    }
+                }
+            
+                GL_DrawTextureEx(gl_textures[UI_TEXTURE],left_arrow_rect,l_arrow_src,true);
+                GL_DrawTexture(gl_textures[UI_TEXTURE],right_arrow_rect,r_arrow_src);
+            }            
         } else if (gl_server.gms.state == GMS::GAME_HASNT_STARTED) {
         }
 endof_frame:

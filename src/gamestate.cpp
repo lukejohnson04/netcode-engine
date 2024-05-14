@@ -91,9 +91,9 @@ enum GMS {
 };
 
 enum GAME_MODE {
-    GAME_MODE_NONE,
     GAME_MODE_STRIKE,
-    GAME_MODE_JOSHFARE
+    GAME_MODE_JOSHFARE,
+    GAME_MODE_COUNT,
 };
 
 // the reason this struct is 100% SEPARATE from game_state is because we don't want
@@ -102,7 +102,7 @@ enum GAME_MODE {
 struct overall_game_manager {
     i32 connected_players=0;
     GMS state=GAME_HASNT_STARTED;
-    GAME_MODE gmode= GAME_MODE_NONE;
+    GAME_MODE gmode= GAME_MODE_STRIKE;
     
     int round_end_tick=-1;
 
@@ -729,7 +729,7 @@ void render_pregame_screen(overall_game_manager &gms, double time_to_start) {
         
         static generic_drawable countdown_clock;
         countdown_clock = generate_text(m5x7,str,{255,240,40},countdown_clock.gl_texture);
-        countdown_clock.scale = {4,4};
+        countdown_clock.scale = {2,2};
         countdown_clock.position = {1280/2-countdown_clock.get_draw_irect().w/2,480};
         GL_DrawTexture(countdown_clock.gl_texture,countdown_clock.get_draw_irect());
     }
@@ -764,4 +764,3 @@ void load_game_state_up_to_tick(game_state &gst, netstate_info_t &c, int target_
         gst.tick++;
     }
 }
-

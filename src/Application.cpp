@@ -181,7 +181,6 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 
 
 static void GameGUIStart() {
-
     
     char winstr[] = "Client x";
     winstr[7] = (char)client_st.client_id + '0';
@@ -249,9 +248,6 @@ static void GameGUIStart() {
 
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
-    //printf("transient size: %d\n",game_state_transient_data_size);
-    //printf("permanent size: %d\n",game_state_permanent_data_size);
-
     
     while (running) {
         // input
