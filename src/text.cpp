@@ -5,6 +5,12 @@
 #define CHAT_MESSAGE_DISPLAY_TIME 3
 #define CHAT_FADE_LEN 1
 
+struct chatline_props {
+    std::string name;
+    std::string message;
+    i32 tick;
+};
+
 struct chatlog_t {
     i32 entry_count=0;
     char raw[MAX_CHAT_ENTRIES][MAX_CHAT_MESSAGE_LENGTH];
@@ -14,10 +20,10 @@ struct chatlog_t {
 chatlog_t chatlog;
 
 struct chatlog_display_t {
-    generic_drawable sprites[MAX_CHAT_ENTRIES];
+    generic_drawable sprites[MAX_CHAT_ENTRIES]={};
 };
 
-chatlog_display_t chatlog_display;
+chatlog_display_t chatlog_display={};
 
 void add_to_chatlog(std::string sender_name,std::string message,i32 tick,chatlog_display_t *disp=nullptr) {
     std::string fin_str = sender_name + ": " + message;
@@ -26,11 +32,10 @@ void add_to_chatlog(std::string sender_name,std::string message,i32 tick,chatlog
     chatlog.tick_added[chatlog.entry_count-1] = tick;
 
     if (disp) {
-        disp->sprites[chatlog.entry_count-1] = generate_text(m5x7,fin_str,{0,100,255,255});
-        disp->sprites[chatlog.entry_count-1].scale = {2,2};
+        disp->sprites[chatlog.entry_count-1] = generate_text(m5x7,fin_str,{0,100,255,255},disp->sprites[chatlog.entry_count-1].gl_texture);
         for (i32 ind=0; ind<chatlog.entry_count;ind++) {
             i32 dist_to_first = chatlog.entry_count - ind;
-            disp->sprites[ind].position = {48,500 - dist_to_first * disp->sprites[ind].get_draw_rect().h - 8};
+            disp->sprites[ind].position = {48,500 - dist_to_first * disp->sprites[ind].get_draw_irect().h - 8};
         }
     }
 }

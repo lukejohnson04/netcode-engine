@@ -13,6 +13,7 @@ struct client_t {
     timer_t sync_timer;
     netstate_info_t NetState;
     std::vector<snapshot_t> merge_snapshots;
+    std::vector<chatline_props> merge_chat;
 
     overall_game_manager &gms=NetState.gms;
 
@@ -39,7 +40,7 @@ struct client_t {
     bool loaded_new_map=false;
 
     // mutex
-    HANDLE _mt_merge_snapshots;
+    HANDLE _mt_merge_snapshots, _mt_merge_chat;
     bool _new_merge_snapshot=false;
     i32 _last_proc_tick_buffer=0;
 };
@@ -97,12 +98,14 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             client_st.loaded_new_map=true;
 
         } else if (pc.type == CHAT_MESSAGE) {
+            WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
             printf("Received chat message from the server\n");
             std::string name(pc.data.chat_message.name);
             std::string message(pc.data.chat_message.message);
             std::cout << name << ": " << message << std::endl;
-            
-            add_to_chatlog(name,message,client_st.last_tick_processed,&chatlog_display);
+
+            client_st.merge_chat.push_back({name,message,client_st.last_tick_processed});
+            ReleaseMutex(client_st._mt_merge_chat);
 
         } else {
             // this gets called when it times out each time from no packet recieved
@@ -206,6 +209,7 @@ static void client_connect(int port,std::string ip_addr) {
     client_st.socket = connect_socket;
 
     client_st._mt_merge_snapshots = CreateMutex(NULL,FALSE,NULL);
+    client_st._mt_merge_chat = CreateMutex(NULL,FALSE,NULL);
 
 #ifndef RELEASE_BUILD
     client_st.username = "Player"+std::to_string(client_st.client_id);

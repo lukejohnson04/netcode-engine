@@ -136,6 +136,8 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
     screenSurface = SDL_GetWindowSurface(window);
 }
 
+#define MAX_MAP_SIZE 32
+
 
 #include "render.cpp"
 #include "audio.cpp"
@@ -143,7 +145,6 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #include "input.cpp"
 
 
-#define MAX_MAP_SIZE 32
 
 #ifdef RELEASE_BUILD
 #define BUYTIME_LENGTH 10
@@ -225,13 +226,13 @@ static void GameGUIStart() {
         generic_drawable money_text;
     } gui_elements;
     gui_elements.health_text = generate_text(m5x7,"100",{255,0,0,255});
-    gui_elements.health_text.scale = {4,4};
-    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
+    gui_elements.health_text.scale = {2,2};
+    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_irect().h)};
     gui_elements.ability_ui_box.gl_texture = gl_textures[TexType::UI_TEXTURE];
 
     
     gui_elements.money_text = generate_text(m5x7,"$800",{0,255,100,255});
-    gui_elements.money_text.scale = {4,4};
+    gui_elements.money_text.scale = {2,2};
     gui_elements.money_text.position = {16,16};
     
     for (i32 ind=0;ind<4;ind++) {
@@ -240,7 +241,7 @@ static void GameGUIStart() {
         
         sprite.bound = {ind*48,0,48,48};
         sprite.scale = {1.5f,1.5f};
-        sprite.position = {1280-16-((4-ind)*sprite.get_draw_rect().w),720-16-sprite.get_draw_rect().h};
+        sprite.position = {1280-16-((4-ind)*sprite.get_draw_irect().w),720-16-sprite.get_draw_irect().h};
     }
 
     camera_t game_camera;
@@ -287,8 +288,8 @@ static void GameGUIStart() {
             // snapshot for 95 instead of sending each client just the snapshot for 100
             
             // snapshots
-            DWORD _merge_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
-            if (_merge_wait == WAIT_OBJECT_0) {
+            DWORD _merge_snapshots_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
+            if (_merge_snapshots_wait == WAIT_OBJECT_0) {
                 if (client_st._new_merge_snapshot) {
                     client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_st.merge_snapshots.begin(),client_st.merge_snapshots.end());
                     client_st.merge_snapshots.clear();
@@ -338,6 +339,17 @@ static void GameGUIStart() {
                     }*/
                 //client_st.NetState.snapshots.clear();
                 ReleaseMutex(client_st._mt_merge_snapshots);
+            }
+
+            DWORD _merge_chat_wait = WaitForSingleObject(client_st._mt_merge_chat,0);
+            if (_merge_chat_wait == WAIT_OBJECT_0) {
+                if (client_st.merge_chat.size() > 0) {
+                    for (auto entry: client_st.merge_chat) {
+                        add_to_chatlog(entry.name,entry.message,entry.tick,&chatlog_display);
+                    }
+                    client_st.merge_chat.clear();
+                }
+                ReleaseMutex(client_st._mt_merge_chat);
             }
             
             while(gs.tick<target_tick) {
@@ -557,8 +569,8 @@ static void GameGUIStart() {
             if (player) {
                 if (player->health != p_health_before_update) {
                     gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
-                    gui_elements.health_text.scale = {4,4};
-                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_rect().h)};
+                    gui_elements.health_text.scale = {2,2};
+                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_irect().h)};
                 } if (player->reloading) {
                     std::string reload_str = std::to_string(player->reload_timer);
                     if (reload_str.size() > 3) {
@@ -571,25 +583,23 @@ static void GameGUIStart() {
                 // draw money
                 if (gs.money[player->id] != p_money_before_update) {
                     gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
-                    gui_elements.money_text.scale = {4,4};
+                    gui_elements.money_text.scale = {2,2};
                     gui_elements.money_text.position = {16,16};
                 }
             }
 
             render_game_state(player,&game_camera);
+            glUseProgram(sh_textureProgram);
             // gui
-            SDL_Rect health_rect,money_rect;
-            health_rect = gui_elements.health_text.get_draw_rect();
-            money_rect = gui_elements.money_text.get_draw_rect();
-            SDL_RenderCopy(sdl_renderer,gui_elements.health_text.texture,NULL,&health_rect);
-            SDL_RenderCopy(sdl_renderer,gui_elements.money_text.texture,NULL,&money_rect);
+            GL_DrawTexture(gui_elements.money_text.gl_texture,gui_elements.money_text.get_draw_irect());
+            GL_DrawTexture(gui_elements.health_text.gl_texture,gui_elements.health_text.get_draw_irect());
             if (player) {
                 if (player->reloading) {
-                    SDL_Rect reload_rect = gui_elements.reload_text.get_draw_rect();
-                    SDL_RenderCopy(sdl_renderer,gui_elements.reload_text.texture,NULL,&reload_rect);
+                    GL_DrawTexture(gui_elements.reload_text.gl_texture,gui_elements.reload_text.get_draw_irect());
                 }
             }
 
+            /*
             // render the score at the end of the round
             if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
                 std::string left_str = std::to_string(gs.score[0]);
@@ -613,6 +623,7 @@ static void GameGUIStart() {
                 SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_rect);
                 SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_rect);
             }
+
             
             if (player) {
                 // draw abilities
@@ -648,7 +659,7 @@ static void GameGUIStart() {
                 SDL_Rect ammo_rect = gui_elements.magazine_cnt_text.get_draw_rect();
                 SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&ammo_rect);
             }
-
+            */
             // buy menu
             if (gs.round_state == ROUND_BUYTIME) {
                 local_persist bool is_buy_menu_open = false;
@@ -657,10 +668,12 @@ static void GameGUIStart() {
                 } if (is_buy_menu_open) {
                     i32 width = 800;
                     i32 height = 620;
-                    SDL_Rect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
-                    SDL_RenderCopy(sdl_renderer,textures[BUY_MENU_TEXTURE],NULL,&dest);
+                    iRect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
+                    GL_DrawTexture(gl_textures[BUY_MENU_TEXTURE],dest);
+                    //SDL_RenderCopy(sdl_renderer,textures[BUY_MENU_TEXTURE],NULL,&dest);
                 }
             }
+            
 
             local_persist bool chatbox_isopen=false;
             local_persist std::string chatbox_text="";
@@ -680,17 +693,16 @@ static void GameGUIStart() {
 
             if (chatbox_isopen) {
                 // if you press the enter key, submit that field!
-                
-                SDL_SetRenderDrawBlendMode(sdl_renderer, SDL_BLENDMODE_BLEND);
-                SDL_SetRenderDrawColor(sdl_renderer,255,255,255,100);
-                SDL_Rect text_input_rect = {48,500+40,400,36};
-                SDL_RenderFillRect(sdl_renderer,&text_input_rect);
+                iRect text_input_rect = {48,500+40,400,36};
+                glUseProgram(sh_colorProgram);
+                GL_DrawRect(text_input_rect,{255,255,255,100});
 
                 local_persist generic_drawable chatbox_entry;
                 if (input.text_submitted) {
                     // send to server
                     packet_t p = {};
                     p.type = CHAT_MESSAGE;
+
                     strcpy_s(p.data.chat_message.message,MAX_CHAT_MESSAGE_LENGTH,chatbox_text.c_str());
                     strcpy_s(p.data.chat_message.name,MAX_USERNAME_LENGTH,client_st.username.c_str());
                     // ought to put this in the client tick code? idk man. doesn't matter too much tho
@@ -707,17 +719,23 @@ static void GameGUIStart() {
                     input.text_input_captured=false;
                     input.input_field = nullptr;
                 } else if (input.text_modified) {
-                    chatbox_entry = generate_text(m5x7,chatbox_text,{255,255,255,255});
-                    chatbox_entry.scale = {2,2};
-                    chatbox_entry.position = {text_input_rect.x + 4, text_input_rect.y + text_input_rect.h - chatbox_entry.get_draw_rect().h-4};
+                    
+                    chatbox_entry = generate_text(m5x7,chatbox_text==""?" ":chatbox_text,{255,255,255,255},chatbox_entry.gl_texture);
+                    chatbox_entry.scale = {1,1};
+                    chatbox_entry.position = {text_input_rect.x + 4, text_input_rect.y + text_input_rect.h - chatbox_entry.get_draw_irect().h-4};
                 }
 
-                if (chatbox_entry.texture) {
-                    SDL_Rect chat_rect = chatbox_entry.get_draw_rect();
-                    SDL_RenderCopy(sdl_renderer,chatbox_entry.texture,NULL,&chat_rect);
+                if (chatbox_entry.gl_texture) {
+                    glUseProgram(sh_textureProgram);
+                    GL_DrawTexture(chatbox_entry.gl_texture,chatbox_entry.get_draw_irect());
                 }
             }
-            
+
+            glUseProgram(sh_textureProgram);
+            /*
+            GLuint colUni = glGetUniformLocation(sh_textureProgram, "color");
+            glUniform4f(colUni,255,255,255,255);
+            */
             for (i32 ind=chatlog.entry_count-1;ind>=0;ind--) {
                 i32 fade_start_tick = chatlog.tick_added[ind]+(CHAT_MESSAGE_DISPLAY_TIME*60);
                 i32 fade_end_tick = fade_start_tick + (CHAT_FADE_LEN * 60);
@@ -725,58 +743,61 @@ static void GameGUIStart() {
                     if (false && target_tick > fade_start_tick) {
                         // fade out
                         u8 a = 255 - (u8)(((double)(target_tick - fade_start_tick) / (double)(fade_end_tick - fade_start_tick)) * 255.0);
-                        //SDL_SetTextureColorMod(sdl_renderer,chatlog_display.sprites[ind].texture,255,255,255,a);
-                        SDL_SetTextureAlphaMod(chatlog_display.sprites[ind].texture,a);
+                        //glUniform4f(colUni,255,255,255,a);
+                    } else {
+                        //glUniform4f(colUni,255,255,255,255);
                     }
-                    SDL_Rect chat_disp_rect = chatlog_display.sprites[ind].get_draw_rect();
-                    SDL_RenderCopy(sdl_renderer,chatlog_display.sprites[ind].texture,NULL,&chat_disp_rect);
+                    iRect dest = chatlog_display.sprites[ind].get_draw_irect();
+                    // TODO: why TF is this width and height constantly stuck at 0???
+                    GL_DrawTexture(chatlog_display.sprites[ind].gl_texture,dest);
                 }
             }
-
+            
             // visualize net data
             local_persist bool visualize_netgraph=true;
             if (input.just_pressed[SDL_SCANCODE_GRAVE]) {
                 visualize_netgraph = !visualize_netgraph;
             }
             if (visualize_netgraph) {
+                
                 i32 end_tick = target_tick + 10;
                 i32 interp_tick = target_tick-client_st.NetState.interp_delay;
                 i32 begin_tick = end_tick-60;
 
                 i32 last_proc_tick=client_st.last_command_processed_by_server;
 
-                SDL_Rect graph_box_rect = {16,16,880,100};
+                iRect graph_box_rect = {16,16,880,100};
                 int padding=20;
+                glUseProgram(sh_colorProgram);
+                GL_DrawRect(graph_box_rect,{255,255,255,255});
+                /*
                 SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
                 SDL_RenderFillRect(sdl_renderer,&graph_box_rect);
-                SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                */
+                //SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                
+                i32 timeline_x = graph_box_rect.x;
+                i32 timeline_y = graph_box_rect.y + graph_box_rect.h/2;
+                i32 timeline_w = graph_box_rect.w;
+                i32 timeline_h = 3;
 
-                int timeline_p1x = graph_box_rect.x;
-                int timeline_p1y = graph_box_rect.y + graph_box_rect.h/2;
-                int timeline_p2x = graph_box_rect.x + graph_box_rect.w;
-                int timeline_p2y = timeline_p1y;
+                // scuffed ah line thickness work around lol
+                GL_DrawRect({timeline_x,timeline_y-1,timeline_w,timeline_h},{0,0,0,255});
 
-                // 3 times to get thickness
-                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y-1,timeline_p2x,timeline_p2y-1);
-                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y,timeline_p2x,timeline_p2y);
-                SDL_RenderDrawLine(sdl_renderer,timeline_p1x,timeline_p1y+1,timeline_p2x,timeline_p2y+1);
-
-                SDL_SetRenderDrawColor(sdl_renderer,120,120,120,255);
                 for (i32 ind=begin_tick;ind<end_tick;ind++) {
                     const int stride = (graph_box_rect.w-padding) / 60;
                     i32 xpos = (ind-begin_tick) * stride + padding/2;
-                    v2i p1 = {graph_box_rect.x + xpos,timeline_p1y-3};
-                    v2i p2 = {graph_box_rect.x + xpos,timeline_p1y+3};
+                    v2i p1 = {graph_box_rect.x + xpos,timeline_y-3};
+                    v2i p2 = {graph_box_rect.x + xpos,timeline_y+3};
+                    Color col = {0,0,0,255};
                     if (ind == target_tick) {
                         p1.y -= 16;
                         p2.y += 16;
-                        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
+                        col = {255,0,0,255};
                     } else if (ind == interp_tick) {
                         p1.y -= 8;
                         p2.y += 8;
-                        SDL_SetRenderDrawColor(sdl_renderer,0,0,255,255);
-                    } else {
-                        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                        col = {0,0,255,255};
                     }
                     i32 count=0;
                     for (auto &snap:client_st.NetState.snapshots) {
@@ -786,42 +807,43 @@ static void GameGUIStart() {
                     }
                     if (count) {
                         if (last_proc_tick > ind) {
-                            SDL_SetRenderDrawColor(sdl_renderer,0,255,0,255);
+                            col = {0,255,0,255};
                         } else {
-                            SDL_SetRenderDrawColor(sdl_renderer,100,100,100+((u8)count/5),255);
+                            col = {0,255,0,255};
                         }
-                        SDL_Rect r = {p1.x-(stride/2),timeline_p1y-8,stride,16};
+                        iRect rect = {p1.x-(stride/2),timeline_y-8,stride,16};
                         // draw a rectangle
-                        SDL_RenderFillRect(sdl_renderer,&r);
-                        SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
-                        SDL_RenderDrawRect(sdl_renderer,&r);
+                        GL_DrawRect(rect,col);
+                        // TODO: draw black rectangle outline here!!!
+                        //SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
+                        //SDL_RenderDrawRect(sdl_renderer,&r);
                     }
-                    SDL_RenderDrawLine(sdl_renderer,p1.x,p1.y,p2.x,p2.y);
+                    GL_DrawRect({p1.x,p1.y,p2.x-p1.x,p2.y-p1.y+2},col);
+                    // TODO: draw these lines!! important!!
+                    /*SDL_RenderDrawLine(sdl_renderer,p1.x,p1.y,p2.x,p2.y);
                     SDL_RenderDrawLine(sdl_renderer,p1.x+1,p1.y,p2.x+1,p2.y);
+                    */
                 }
 
                 std::string curr_tick_str = "Tick: " + std::to_string(target_tick);
                 std::string last_input_processed_by_server_str = "Last processed input: " + std::to_string(last_proc_tick);
-                generic_drawable curr_tick = generate_text(m5x7,curr_tick_str, {0,255,0,255});
+                local_persist generic_drawable curr_tick;
+                curr_tick = generate_text(m5x7,curr_tick_str, {0,255,0,255}, curr_tick.gl_texture);
                 curr_tick.position = {graph_box_rect.x, graph_box_rect.y + graph_box_rect.h+4};
-                curr_tick.scale = {2,2};
+                //curr_tick.scale = {2,2};
 
-                SDL_Color col;
+                Color col = {255,0,0,255};
                 if (last_proc_tick > target_tick) {
                     col = {0,255,0,255};
-                } else {
-                    col = {255,0,0,255};
                 }
-                generic_drawable last_proc = generate_text(m5x7,last_input_processed_by_server_str, col);
-                last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_rect().h + 4);
-                last_proc.scale = {2,2};
+                local_persist generic_drawable last_proc;
+                last_proc = generate_text(m5x7,last_input_processed_by_server_str, col, last_proc.gl_texture);
+                last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_irect().h + 4);
+                //last_proc.scale = {2,2};
 
-                SDL_Rect currtick_rect,lastproc_rect;
-                currtick_rect=curr_tick.get_draw_rect();
-                lastproc_rect = last_proc.get_draw_rect();
-                SDL_RenderCopy(sdl_renderer,curr_tick.texture,NULL,(SDL_Rect*)&currtick_rect);
-                SDL_RenderCopy(sdl_renderer,last_proc.texture,NULL,(SDL_Rect*)&lastproc_rect);
-                
+                glUseProgram(sh_textureProgram);
+                GL_DrawTexture(curr_tick.gl_texture,curr_tick.get_draw_irect());
+                GL_DrawTexture(last_proc.gl_texture,last_proc.get_draw_irect());
                 
             }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {

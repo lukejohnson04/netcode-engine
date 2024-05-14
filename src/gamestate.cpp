@@ -234,7 +234,13 @@ void load_permanent_data_from_map(i32 map) {
 
     ct_spawn_count=0;
     t_spawn_count=0;
-    
+
+
+    /*glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
+    glClearColor(1.f, 1.f, 0.f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(sh_textureProgram);
+    */
     for (i32 x=0; x<32; x++) {
         for (i32 y=0; y<32; y++) {
             Color col = {0,0,0,0};
@@ -263,12 +269,35 @@ void load_permanent_data_from_map(i32 map) {
             } else {
                 mp.tiles[x][y] = TT_GROUND;
             }
+
+            /*
+            iRect dest,src;
+            src = {0,0,16,16};
+            dest = {x*64,y*64,64,64};
+            u8 type = mp.tiles[x][y];
+            if (type == TT_WALL) {
+                src={16,0,16,16};
+            } else if (type == TT_BOMBSITE) {
+                src={32,0,16,16};
+            } else if (type == TT_A) {
+                src={32,16,16,16};
+            } else if (type == TT_AA) {
+                src={32,32,16,16};
+            } else if (type == TT_ARROW_UPLEFT) {
+                src={48,16,16,16};
+            } else if (type == TT_ARROW_UPRIGHT) {
+                src={48,32,16,16};
+            } else {
+                src={16,16,16,16};
+            }
+
+            GL_DrawTexture(gl_textures[TILE_TEXTURE],dest,src);
+            */
         }
     }
+    //glBindFramebuffer(GL_FRAMEBUFFER,0);
     SDL_FreeSurface(level_surface);
-    mp.static_texture_generated=false;
-    
-    float vertices[]
+    mp.static_texture_generated=false;    
 }
 
 void gamestate_load_map(overall_game_manager &gms, i32 map) {
@@ -613,9 +642,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
     // Render start
     glClearColor(1.f, 0.0f, 0.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
-    glClearColor(1.f, 1.f, 0.f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+
 
     v2i cam_mod = {0,0};
     if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
@@ -623,7 +650,9 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
     iRect cam_rect = {(i32)game_camera->pos.x - (1280/2),(i32)game_camera->pos.y - (720/2),1280,720};
 
     glUseProgram(sh_textureProgram);
-    
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
+    glClearColor(1.f, 1.f, 0.f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
     for (i32 x=0; x<MAX_MAP_SIZE; x++) {
         for (i32 y=0; y<MAX_MAP_SIZE; y++) {
             i32 type = mp.tiles[x][y];
@@ -651,38 +680,10 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
             GL_DrawTexture(gl_textures[TILE_TEXTURE],dest,src);
         }
     }
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
     
     // lol is this objectively horrible?? its a massive texture so its a great idea but poor execution
     // i mean who rly cares tho!
-
-    /*
-    for (i32 x=0; x<MAX_MAP_SIZE; x++) {
-        for (i32 y=0; y<MAX_MAP_SIZE; y++) {
-            i32 type = mp.tiles[x][y];
-            SDL_Rect dest = {x*64+cam_mod.x,y*64+cam_mod.y,64,64};
-            SDL_Rect src={0,0,16,16};
-            if (type == TT_GROUND) {
-                src={16,16,16,16};
-            } else if (type == TT_WALL) {
-                src={16,0,16,16};
-            } else if (type == TT_BOMBSITE) {
-                src={32,0,16,16};
-            } else if (type == TT_A) {
-                src={32,16,16,16};
-            } else if (type == TT_AA) {
-                src={32,32,16,16};
-            } else if (type == TT_ARROW_UPLEFT) {
-                src={48,16,16,16};
-            } else if (type == TT_ARROW_UPRIGHT) {
-                src={48,32,16,16};
-            }
-            SDL_RenderCopy(sdl_renderer,textures[TILE_TEXTURE],&src,&dest);
-        }
-    }
-    */
-    //SDL_SetRenderTarget(sdl_renderer,textures[WORLD_OBJECTS_TEXTURE]);
-    //SDL_SetRenderDrawColor(sdl_renderer,0,0,0,0);
-    //SDL_RenderClear(sdl_renderer);
     glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_OBJECTS]);
     glClearColor(0.0f,0.0f,0.0f,0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -828,7 +829,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
 
     glBindFramebuffer(GL_FRAMEBUFFER,0);
     glUseProgram(sh_textureProgram);
-    GL_DrawTextureEx(gl_textures[TX_GAME_WORLD],{0,0,0,0},{0,0,0,0},false,true);
+    GL_DrawTextureEx(gl_textures[TX_GAME_WORLD],{0,0,1280,720},{0,0,0,0},false,true);
 
     if (draw_shadows) {
         glUseProgram(sh_modProgram);
@@ -870,48 +871,31 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
     } else {
         GL_DrawTextureEx(gl_textures[TX_GAME_OBJECTS],{0,0,0,0},{0,0,0,0},false,true);
     }
-    //glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
-    // draw shadow over the game world
-    // Get the uniform variables location. You've probably already done that before...
 
-    /*GLuint tex1_loc = glGetUniformLocation(sh_modProgram, "_texture1");
-      GLuint tex2_loc = glGetUniformLocation(sh_modProgram, "_texture2");
-
-      glUseProgram(sh_modProgram);
-      glUniform1i(tex1_loc, 0);
-      glUniform1i(tex2_loc,  1);
-
-    
-    GL_DrawTextureEx(gl_textures[TX_SHADOW],{0,0,1280,720},{0,0,1280,720},false,true);
-    */
-    //glBindFramebuffer(GL_FRAMEBUFFER,0);
-    //GL_DrawTextureEx(gl_textures[TX_GAME_WORLD],{0,0,1280,720},{0,0,1280,720},false,true);
-    //glUseProgram(0);
-    return;
-
+    glUseProgram(sh_textureProgram);
     // gui elements
     if (gs.round_state == ROUND_BUYTIME) {
         double time_until_start = (gs.buytime_end_tick-gs.tick) * (1.0/60.0);
-
         std::string timer_str=std::to_string((int)ceil(time_until_start));;
-        generic_drawable round_start_timer;
-        v2 scale = {4,4};
-        round_start_timer = generate_text(m5x7,timer_str,{255,0,0,255});
-        round_start_timer.scale = scale;
-        round_start_timer.position = {1280/2-round_start_timer.get_draw_rect().w/2,24};
-        SDL_Rect st_timer_rect = round_start_timer.get_draw_rect();
-        SDL_RenderCopy(sdl_renderer,round_start_timer.texture,NULL,&st_timer_rect);
+        local_persist generic_drawable round_start_timer={};
+        round_start_timer = generate_text(m5x7,timer_str,{255,0,0,255},round_start_timer.gl_texture);
+        round_start_timer.scale = {2,2};
+        round_start_timer.position = {1280/2-round_start_timer.get_draw_irect().w/2,24};
+        GL_DrawTexture(round_start_timer.gl_texture,round_start_timer.get_draw_irect());
+        std::cout << timer_str << std::endl;
+
     } else if (gs.round_state == ROUND_PLAYING && gs.bomb_planted) {
         double time_until_detonation = (gs.bomb_planted_tick+(BOMB_TIME_TO_DETONATE*60) - gs.tick) * (1.0/60.0);
         std::string timer_str=std::to_string((int)ceil(time_until_detonation));
-        generic_drawable detonation_timer;
-        v2 scale = {4,4};
-        detonation_timer = generate_text(m5x7,timer_str,{255,0,0,255});
-        detonation_timer.scale = scale;
-        detonation_timer.position = {1280/2-detonation_timer.get_draw_rect().w/2,24};
-        SDL_Rect dt_timer_rect = detonation_timer.get_draw_rect();
-        SDL_RenderCopy(sdl_renderer,detonation_timer.texture,NULL,&dt_timer_rect);
+        local_persist generic_drawable detonation_timer={};
+        detonation_timer = generate_text(m5x7,timer_str,{255,0,0,255},detonation_timer.gl_texture);
+        detonation_timer.scale = {2,2};
+        detonation_timer.position = {1280/2-detonation_timer.get_draw_irect().w/2,24};
+        GL_DrawTexture(detonation_timer.gl_texture,detonation_timer.get_draw_irect());
     }
+
+    /*
+    */
     
     /*
     if (gs.tick<gs.round_start_tick+90) {

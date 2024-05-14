@@ -164,9 +164,9 @@ internal GLuint GL_create_framebuffer(GLuint texture) {
     return fb;
 }
 
-internal void GL_load_texture_for_framebuffer(GLuint texture) {
+internal void GL_load_texture_for_framebuffer(GLuint texture,i32 width=WINDOW_WIDTH,i32 height=WINDOW_HEIGHT) {
     glBindTexture(GL_TEXTURE_2D,texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D,0);
@@ -356,10 +356,12 @@ struct camera_t {
     union {
         character *follow;
     };
+
     
     iRect get_draw_rect() {
         return {(int)(pos.x-size.x/2),(int)(pos.y-size.y/2),(int)size.x,(int)size.y};
     }
+    
 
     v2 get_center() {
         return pos + (v2(size.x/2.f,size.y/2.f));
@@ -375,6 +377,7 @@ struct generic_drawable {
     v2 scale={1,1};
     iRect bound = {0,0,0,0};
 
+    /*
     SDL_Rect get_draw_rect() {
         if (bound.w==0||bound.h==0) {
             glBindTexture(GL_TEXTURE_2D,gl_texture);
@@ -388,6 +391,7 @@ struct generic_drawable {
         SDL_Rect res={position.x,position.y,(int)((float)w*scale.x),(int)((float)h*scale.y)};
         return res;
     }
+    */
 
     iRect get_draw_irect() {
         if (bound.w==0||bound.h==0) {
@@ -404,11 +408,11 @@ struct generic_drawable {
     }
 };
 
-generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255,255,255,255},GLuint tex=NULL) {
+internal generic_drawable generate_text(TTF_Font *font,std::string str,Color col={255,255,255,255},GLuint tex=NULL) {
     generic_drawable res;
     
     SDL_Surface* temp_surface =
-        TTF_RenderText_Solid(font, str.c_str(), col);
+        TTF_RenderText_Solid(font, str.c_str(),*(SDL_Color*)&col);
     temp_surface = SDL_ConvertSurfaceFormat(temp_surface, SDL_PIXELFORMAT_ARGB8888, 0);
 
     if (tex != NULL) {
@@ -418,7 +422,7 @@ generic_drawable generate_text(TTF_Font *font,std::string str,SDL_Color col={255
 
     res.gl_texture = tex;
     GL_load_texture_from_surface(res.gl_texture,temp_surface);
-        
+    
     SDL_FreeSurface(temp_surface);
     return res;
 }
@@ -609,7 +613,6 @@ void GL_DrawTextureEx(GLuint texture, iRect dest={0,0,0,0}, iRect src={0,0,0,0},
     
     GLint transformLoc = glGetUniformLocation(sh_textureProgram,"model");
     glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
-    glBindVertexArray(gl_varrays[TEXTURE_VAO]);
 
     glBindVertexArray(gl_varrays[TEXTURE_VAO]);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(0));
@@ -620,7 +623,6 @@ void GL_DrawTextureEx(GLuint texture, iRect dest={0,0,0,0}, iRect src={0,0,0,0},
     
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER,0);
     model = glm::mat4(1.0f);
     glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
 }
