@@ -24,6 +24,8 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <random>
+
 
 #define DEFAULT_PORT 51516
 #define RELEASE_BUILD
@@ -32,6 +34,8 @@
 
 #define SDL_MAIN_HANDLED
 
+
+// NOTE: glew is 100% what makes compile time slow lol
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -144,8 +148,8 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #include "audio.cpp"
 #include "text.cpp"
 #include "input.cpp"
-
-
+#include "random.cpp"
+#include "perlin.cpp"
 
 #ifdef RELEASE_BUILD
 #define BUYTIME_LENGTH 10
@@ -250,13 +254,16 @@ static void GameGUIStart() {
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
 
-    transient_game_state = (void*)&gs;
-    permanent_game_state = (void*)&mp;
+    gm_strike gamestate = {};
+    strike_map_t map={};
+    transient_game_state = (void*)&gamestate;
+    permanent_game_state = (void*)&map;
     
     while (running) {
         // input
         PollEvents(&input,&running);
         character *player=nullptr;
+        //gm_strike &gs = *(gm_strike*)transient_game_state;
         if (gs.players[client_st.client_id].id != ID_DONT_EXIST) {
             player = &gs.players[client_st.client_id];
         }
@@ -274,7 +281,7 @@ static void GameGUIStart() {
                 printf("Changed interp delay to %d\n",client_st.NetState.interp_delay);
             }
             
-            i32 prev_wall_count=mp.wall_count;
+            i32 prev_wall_count=_mp.wall_count;
             update_player_controller(player,target_tick,&game_camera);
             
             bool update_health_display=false;
@@ -479,8 +486,8 @@ static void GameGUIStart() {
                 auto &rps = client_sided_render_geometry.raycast_points;
                 rps.clear();
                 client_sided_render_geometry.segments.clear();
-                for (i32 n=0; n<mp.wall_count; n++) {
-                    v2i wall=mp.walls[n];
+                for (i32 n=0; n<_mp.wall_count; n++) {
+                    v2i wall=_mp.walls[n];
                     rps.push_back(v2(wall.x,wall.y)*64);
                     rps.push_back(v2(wall.x+1,wall.y)*64);
                     rps.push_back(v2(wall.x,wall.y+1)*64);
@@ -516,8 +523,8 @@ static void GameGUIStart() {
                     
                 }
                 
-                for (i32 ind=0; ind<mp.wall_count; ind++) {
-                    v2 wall=mp.walls[ind];
+                for (i32 ind=0; ind<_mp.wall_count; ind++) {
+                    v2 wall=_mp.walls[ind];
                     v2 p1 = v2(wall.x,wall.y)*64;
                     v2 p2 = v2(wall.x+1,wall.y)*64;
                     v2 p3 = v2(wall.x,wall.y+1)*64;
@@ -1019,212 +1026,243 @@ static void demo() {
     glBindFramebuffer(GL_FRAMEBUFFER,0);
     */
 
+    const i32 CHUNK_SIZE = 16;
+    const i32 MAP_SIZE = 8;
+    
+    SDL_Surface *perlin_surface = SDL_CreateRGBSurfaceWithFormat(0,CHUNK_SIZE*MAP_SIZE,CHUNK_SIZE*MAP_SIZE,32,SDL_PIXELFORMAT_ARGB8888);
+
+    RandomState rand;
+    random_engine_state = &rand;
+    Random::Init();
+
+    float perlin_map[MAP_SIZE*CHUNK_SIZE][MAP_SIZE*CHUNK_SIZE];
+    float normals[MAP_SIZE*CHUNK_SIZE+1][MAP_SIZE*CHUNK_SIZE+1];
+    memset(perlin_map,0,sizeof(perlin_map));
+    // accessing a normal at position x, y gives the normal located at the top left of the tile at that position
+    for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE+1;x++) {
+        for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE+1;y++) {
+            normals[x][y] = Random::Float(0.f,(float)PI*2.f);
+        }
+    }
+
+    for (i32 cx=0;cx<MAP_SIZE;cx++) {
+        for (i32 cy=0;cy<MAP_SIZE;cy++) {
+            // get normals of the chunk
+            v2 t1_norm = {cos(normals[cx][cy]),sin(normals[cx][cy])};
+            v2 t2_norm = {cos(normals[cx+1][cy]),sin(normals[cx+1][cy])};
+            v2 t3_norm = {cos(normals[cx][cy+1]),sin(normals[cx][cy+1])};
+            v2 t4_norm = {cos(normals[cx+1][cy+1]),sin(normals[cx+1][cy+1])};
+
+            //i32 curr_chunk_size=CHUNK_SIZE/2;
+            // loop through all pixels in chunk
+            for (i32 tx=0;tx<CHUNK_SIZE;tx++) {
+                for (i32 ty=0;ty<CHUNK_SIZE;ty++) {
+                    // normalized coordinate points within the chunk
+                    float nx = tx / (float)CHUNK_SIZE;
+                    float ny = ty / (float)CHUNK_SIZE;
+
+                    v2 t1_offset = {nx,ny};
+                    v2 t2_offset = {nx-1,ny};
+                    v2 t3_offset = {nx,ny-1};
+                    v2 t4_offset = {nx-1,ny-1};
+                    
+                    float scalar1 = (t1_offset.x * t1_norm.x) + (t1_offset.y * t1_norm.y);
+                    float scalar2 = (t2_offset.x * t2_norm.x) + (t2_offset.y * t2_norm.y);
+                    float scalar3 = (t3_offset.x * t3_norm.x) + (t3_offset.y * t3_norm.y);
+                    float scalar4 = (t4_offset.x * t4_norm.x) + (t4_offset.y * t4_norm.y);
+
+                    float u = perlin_fade(nx);
+                    float v = perlin_fade(ny);
+
+                    // lerp horizontally, then vertically
+                    // then lerp the two results
+                    float smooth1 = lerp(scalar1, scalar2, u);
+                    float smooth2 = lerp(scalar3, scalar4, u);
+                    float final_val = lerp(smooth1, smooth2, v);
+                    perlin_map[tx+cx*CHUNK_SIZE][ty+cy*CHUNK_SIZE] += final_val;
+                }
+            }
+        }
+    } for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE;x++) {
+        for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE;y++) {
+            u8 val = (u8)(((perlin_map[x][y]+1)/2)*255.f);
+            Color col = {val,val,val,255};
+            setpixel(perlin_surface,x,y,col);            
+        }
+    }
+    /*
+      u8 val = (u8)(((final_val+1)/2)*255.f);
+      Color col = {val,val,val,255};
+      setpixel(perlin_surface,x,y,col);
+    */
+
+    GLuint gl_perlin_tex;
+    glGenTextures(1,&gl_perlin_tex);
+    GL_load_texture_from_surface(gl_perlin_tex,perlin_surface);
+    
+    bool shadow_demo=true;
+
     while (running) {
         // input
         PollEvents(&input,&running);
+        if (input.just_pressed[SDL_SCANCODE_F]) {
+            shadow_demo = !shadow_demo;
+        }
         clock_t curr_time = clock();
         double elapsed = (double)(curr_time - start_time) / CLOCKS_PER_SEC;
-        
-        double sin_val = (sin(elapsed)+1)/2;
-        double cos_val = (cos(elapsed)+1)/2;
-        double tan_val = (tan(elapsed)+1)/2;
-        Color clear_col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),255,255);//(u8)(tan_val*255.f),255);
+        if (shadow_demo) {
 
-        glBindFramebuffer(GL_FRAMEBUFFER,test_fb);
-        glClearColor(clear_col.r/255.f, clear_col.g/255.f, clear_col.b/255.f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glUseProgram(sh_colorProgram);
+            double sin_val = (sin(elapsed)+1)/2;
+            double cos_val = (cos(elapsed)+1)/2;
+            double tan_val = (tan(elapsed)+1)/2;
+            Color clear_col = Color((u8)(sin_val*255.f),(u8)(cos_val*255.f),255,255);
 
-        // Draw the rectangle
-        
-
-        
-        /*FORn(walls,wall_count,wall) {
-            GL_DrawRect({wall->x*64,wall->y*64,64,64},col);
+            glBindFramebuffer(GL_FRAMEBUFFER,test_fb);
+            glClearColor(clear_col.r/255.f, clear_col.g/255.f, clear_col.b/255.f, 1.0f);
+        } else {
+            glBindFramebuffer(GL_FRAMEBUFFER,0);
+            glClearColor(0,0,0,1.0f);
         }
-        */
+        glClear(GL_COLOR_BUFFER_BIT);
         
         glUseProgram(sh_textureProgram);
         GL_DrawTextureEx(bg_texture,{0,0,0,0},{0,0,0,0},false,true);
 
 
         v2i mpos = get_mouse_position();
-        //glUseProgram(sh_textureProgram);
-        GL_DrawTexture(dot_tex,{mpos.x-16,mpos.y-16,32,32});
-        
-        /*
-          Draft 2
-        for (i32 n=0;n<40;n++) {
-            float angle = ((PI*2.f) * n) / 40.f;
-            v2 t = mpos + convert_angle_to_vec(angle) * 1200.f;
 
-            SDL_Rect dot_dest;
-            intersect_props col = get_collision(mpos,t,walls,wall_count);
-            if (col.collides) {
-                dot_dest = {(int)col.collision_point.x-8,(int)col.collision_point.y-8,16,16};
-            } else {
-                dot_dest = {(int)t.x-8,(int)t.y-8,16,16};
-            }
-        
-            SDL_Rect dot_start = {mpos.x-8,mpos.y-8,16,16};
-            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
-            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_dest);
-            SDL_RenderDrawLine(sdl_renderer,dot_start.x+8,dot_start.y+8,dot_dest.x+8,dot_dest.y+8);
-            
-            }
-        */
-        /* draft 3 & 4 */
-        // so comically slow LMAO
-        SDL_Rect dot_start = {mpos.x-8,mpos.y-8,16,16};
-        //SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_start);
+        if (shadow_demo) {
+            iRect dot_start = {mpos.x-8,mpos.y-8,16,16};
 
-        i32 pt_count=wall_count*4;
-        std::vector<v2i> dests;
+            i32 pt_count=wall_count*4;
+            std::vector<v2i> dests;
 
-        for (i32 n=0;n<pt_count+4;n++) {
-            v2 t;
-            i32 p = n%4;
-            if (n>=pt_count) {
-                t = p==0?v2(0,0):p==1?v2(1280,0):p==2?v2(0,720):v2(1280,720);
-            } else {
-                v2i wall = walls[(i32)floor((float)n/4.f)];
-                t = p==0?v2(wall.x,wall.y):p==1?v2(wall.x+1,wall.y):p==2?v2(wall.x,wall.y+1):v2(wall.x+1,wall.y+1);
-                t*=64;
-            }
-            
-            intersect_props col = get_collision(mpos,t,client_sided_render_geometry.segments);
-            v2i pt;
-            if (!col.collides) {
-                if (n < pt_count) {
-                    printf("ERROR\n");
+            for (i32 n=0;n<pt_count+4;n++) {
+                v2 t;
+                i32 p = n%4;
+                if (n>=pt_count) {
+                    t = p==0?v2(0,0):p==1?v2(1280,0):p==2?v2(0,720):v2(1280,720);
+                } else {
+                    v2i wall = walls[(i32)floor((float)n/4.f)];
+                    t = p==0?v2(wall.x,wall.y):p==1?v2(wall.x+1,wall.y):p==2?v2(wall.x,wall.y+1):v2(wall.x+1,wall.y+1);
+                    t*=64;
                 }
-                pt = t;
-            } else {
-                pt = v2(col.collision_point.x,col.collision_point.y);
+            
+                intersect_props col = get_collision(mpos,t,client_sided_render_geometry.segments);
+                v2i pt;
+                if (!col.collides) {
+                    if (n < pt_count) {
+                        printf("ERROR\n");
+                    }
+                    pt = t;
+                } else {
+                    pt = v2(col.collision_point.x,col.collision_point.y);
+                }
+
+                // two slightly off points
+                v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(mpos,t) + 0.005f) * 2000.f) + mpos;
+                v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(mpos,t) - 0.005f) * 2000.f) + mpos;
+                intersect_props col_2 = get_collision(mpos,pt_2,client_sided_render_geometry.segments);
+                intersect_props col_3 = get_collision(mpos,pt_3,client_sided_render_geometry.segments);
+                if (col_2.collides==false) {
+                    dests.push_back(v2(pt_2-mpos).normalize() * 1500.f + mpos);
+                } else {
+                    dests.push_back(col_2.collision_point);
+                }
+                if (col_3.collides==false) {
+                    dests.push_back(v2(pt_3-mpos).normalize() * 1500.f + mpos);
+                } else {
+                    dests.push_back(col_3.collision_point);
+                }            
+            
+                dests.push_back(pt);
+            
             }
 
-            // two slightly off points
-            v2 pt_2 = (convert_angle_to_vec(get_angle_to_point(mpos,t) + 0.005f) * 2000.f) + mpos;
-            v2 pt_3 = (convert_angle_to_vec(get_angle_to_point(mpos,t) - 0.005f) * 2000.f) + mpos;
-            intersect_props col_2 = get_collision(mpos,pt_2,client_sided_render_geometry.segments);
-            intersect_props col_3 = get_collision(mpos,pt_3,client_sided_render_geometry.segments);
-            if (col_2.collides==false) {
-                dests.push_back(v2(pt_2-mpos).normalize() * 1500.f + mpos);
-            } else {
-                dests.push_back(col_2.collision_point);
+            std::sort(dests.begin(),dests.end(),[mpos](auto &left, auto &right) {
+                return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
+            });
+            glBindFramebuffer(GL_FRAMEBUFFER,objects_fb);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        
+            glUseProgram(sh_textureProgram);
+            GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE], {300,400,64,64}, {0,0,32,32}, false, false, (float)elapsed);//,{300,600,64,64},{0,0,32,32},true);
+            GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
+
+            glBindFramebuffer(GL_FRAMEBUFFER,shadow_fb);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.5f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        
+            glUseProgram(sh_colorProgram);
+            glUniform4f(glGetUniformLocation(sh_colorProgram,"color"),1.0f,1.0f,1.0f,1.0f);
+        
+            for (i32 n=0;n<dests.size();n++) {
+                v2i pt=dests[n];
+                v2i prev_point=n==0?dests.back():dests[n-1];
+                float vertices[] = {
+                    (float)mpos.x,(float)mpos.y, 0.0f,
+                    (float)pt.x,  (float)pt.y,   0.0f,
+                    (float)prev_point.x, (float)prev_point.y, 0.0f
+                };
+                glBindVertexArray(shadow_VAO);
+                glBindBuffer(GL_ARRAY_BUFFER,shadow_VBO);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+                glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3 * sizeof(float),0);
+                glEnableVertexAttribArray(0);
+
+                glDrawArrays(GL_TRIANGLES,0,3);
+                glBindBuffer(GL_ARRAY_BUFFER,0);
+                glBindVertexArray(0);
             }
-            if (col_3.collides==false) {
-                dests.push_back(v2(pt_3-mpos).normalize() * 1500.f + mpos);
-            } else {
-                dests.push_back(col_3.collision_point);
-            }            
-            
-            dests.push_back(pt);
-            
-        }
 
-        std::sort(dests.begin(),dests.end(),[mpos](auto &left, auto &right) {
-            return get_angle_to_point(mpos,left)<get_angle_to_point(mpos,right);
-        });
 
-        glBindFramebuffer(GL_FRAMEBUFFER,objects_fb);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        
-        glUseProgram(sh_textureProgram);
-        GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE], {300,400,64,64}, {0,0,32,32}, false, false, (float)elapsed);//,{300,600,64,64},{0,0,32,32},true);
-        GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
+            glBindFramebuffer(GL_FRAMEBUFFER,0);
+            glUseProgram(sh_textureProgram);
+            GL_DrawTextureEx(test_world_texture,{0,0,0,0},{0,0,0,0},false,true);
 
-        glBindFramebuffer(GL_FRAMEBUFFER,shadow_fb);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.5f);
-        glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(sh_modProgram);
+            GLuint tex1_loc = glGetUniformLocation(sh_modProgram, "_texture1");
+            GLuint tex2_loc = glGetUniformLocation(sh_modProgram, "_texture2");
         
-        glUseProgram(sh_colorProgram);
-        glUniform4f(glGetUniformLocation(sh_colorProgram,"color"),1.0f,1.0f,1.0f,1.0f);
-        
-        for (i32 n=0;n<dests.size();n++) {
-            v2i pt=dests[n];
-            v2i prev_point=n==0?dests.back():dests[n-1];
+            glActiveTexture(GL_TEXTURE0); // Texture unit 0
+            glBindTexture(GL_TEXTURE_2D, test_shadow_texture);
+            glUniform1i(tex1_loc, 0);
+            glActiveTexture(GL_TEXTURE1); // Texture unit 1
+            glBindTexture(GL_TEXTURE_2D, test_objects_texture);
+            glUniform1i(tex2_loc, 1);
+
             float vertices[] = {
-                (float)mpos.x,(float)mpos.y, 0.0f,
-                (float)pt.x,  (float)pt.y,   0.0f,
-                (float)prev_point.x, (float)prev_point.y, 0.0f
+                0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f,
+                1280.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                1280.0f, 720.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 720.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
             };
-            glBindVertexArray(shadow_VAO);
-            glBindBuffer(GL_ARRAY_BUFFER,shadow_VBO);
+            glm::mat4 model = glm::mat4(1.0f);
+            GLint transformLoc = glGetUniformLocation(sh_modProgram,"model");
+            glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+            glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+            glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[TEXTURE_VBO]);
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3 * sizeof(float),0);
+        
+            glBindVertexArray(gl_varrays[TEXTURE_VAO]);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(0));
             glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(5 * sizeof(float)));
+            glEnableVertexAttribArray(2);
 
-            glDrawArrays(GL_TRIANGLES,0,3);
-            glBindBuffer(GL_ARRAY_BUFFER,0);
+            glBindBuffer(GL_ARRAY_BUFFER,0);    
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
             glBindVertexArray(0);
+        } else {
+            glUseProgram(sh_textureProgram);
+            GL_DrawTexture(gl_perlin_tex,{128,32,256,256});
         }
-
-
-        glBindFramebuffer(GL_FRAMEBUFFER,0);
-        glUseProgram(sh_textureProgram);
-        GL_DrawTextureEx(test_world_texture,{0,0,0,0},{0,0,0,0},false,true);
-
-        glUseProgram(sh_modProgram);
-        GLuint tex1_loc = glGetUniformLocation(sh_modProgram, "_texture1");
-        GLuint tex2_loc = glGetUniformLocation(sh_modProgram, "_texture2");
-        
-        glActiveTexture(GL_TEXTURE0); // Texture unit 0
-        glBindTexture(GL_TEXTURE_2D, test_shadow_texture);
-        glUniform1i(tex1_loc, 0);
-        glActiveTexture(GL_TEXTURE1); // Texture unit 1
-        glBindTexture(GL_TEXTURE_2D, test_objects_texture);
-        glUniform1i(tex2_loc, 1);
-
-        float vertices[] = {
-            0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f,
-            1280.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-            1280.0f, 720.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, 720.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
-        };
-        glm::mat4 model = glm::mat4(1.0f);
-        GLint transformLoc = glGetUniformLocation(sh_modProgram,"model");
-        glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
-
-        glBindVertexArray(gl_varrays[TEXTURE_VAO]);
-        glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[TEXTURE_VBO]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-        
-        glBindVertexArray(gl_varrays[TEXTURE_VAO]);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(0));
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(5 * sizeof(float)));
-        glEnableVertexAttribArray(2);
-
-        glBindBuffer(GL_ARRAY_BUFFER,0);    
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-        glBindVertexArray(0);
-
-
-
-        //GL_DrawTextureEx(gl_textures[GAME_WORLD_TEXTURE],{0,0,1280,720},{0,0,1280,720},false,true);
-        //GL_DrawTexture(test_mask_texture);
-        
-
-        //glUniformMatrix4fv(glGetUniformLocation(sh_textureProgram, "transform"), 1, GL_FALSE, glm::value_ptr(transform));
-        
-        /*
-        SDL_SetRenderDrawColor(sdl_renderer,255,0,0,255);
-        for (i32 n=0; n<dests.size(); n++) {
-            v2i pt = dests[n];
-            SDL_Rect dot_dest = {pt.x-8,pt.y-8,16,16};
-            SDL_RenderCopy(sdl_renderer,dot,NULL,&dot_dest);
-            SDL_RenderDrawLine(sdl_renderer,dot_start.x+8,dot_start.y+8,dot_dest.x+8,dot_dest.y+8);
-        }
-        */
         SDL_GL_SwapWindow(window);
-        //SDL_RenderPresent(sdl_renderer);
-
-        //SDL_RenderPresent(sdl_renderer);
     }
 }
 

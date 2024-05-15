@@ -474,11 +474,11 @@ static void server(int port) {
             if (!generated) {
                 generated=true;
                 std::string n_str="UndefinedGameMode";
-                if (gl_server.gms.gmode == GAME_MODE_STRIKE)
+                if (gl_server.gms.gmode == GM_STRIKE)
                     n_str = "JoshStrike";
-                else if (gl_server.gms.gmode == GAME_MODE_JOSHFARE)
+                else if (gl_server.gms.gmode == GM_JOSHFARE)
                     n_str = "JoshFare";
-                else if (gl_server.gms.gmode == GAME_MODE_JOSHUAGAME)
+                else if (gl_server.gms.gmode == GM_JOSHUAGAME)
                     n_str = "Joshua Game";
                 game_mode_text = generate_text(m5x7,n_str,COLOR_WHITE,game_mode_text.gl_texture);
                 game_mode_text.scale = {2,2};
@@ -495,7 +495,7 @@ static void server(int port) {
                     l_arrow_src.x+=16;
                     if (input.mouse_just_pressed) {
                         gl_server.gms.gmode=(GAME_MODE)((i32)gl_server.gms.gmode-1);
-                        if (gl_server.gms.gmode < 0) gl_server.gms.gmode = (GAME_MODE)(GAME_MODE_COUNT-1);
+                        if (gl_server.gms.gmode < 0) gl_server.gms.gmode = (GAME_MODE)(GM_COUNT-1);
                         generated=false;
                     }
                 }
@@ -504,7 +504,7 @@ static void server(int port) {
                     r_arrow_src.x+=16;
                     if (input.mouse_just_pressed) {
                         gl_server.gms.gmode = (GAME_MODE)((i32)gl_server.gms.gmode+1);
-                        if (gl_server.gms.gmode >= GAME_MODE_COUNT) gl_server.gms.gmode=(GAME_MODE)0;
+                        if (gl_server.gms.gmode >= GM_COUNT) gl_server.gms.gmode=(GAME_MODE)0;
                         generated=false;
                     }
                 }

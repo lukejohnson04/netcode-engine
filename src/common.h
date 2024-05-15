@@ -35,8 +35,12 @@ typedef u16 entity_id;
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
 
+internal float clamp(float min, float max, float a) {
+    return min > a ? min : max < a ? max : a;
+}
 
-#define PI 3.1415926f
+
+#define PI 3.1415926
 
 struct v2;
 struct v2i {
@@ -83,6 +87,13 @@ inline v2 operator*(v2 left, float right) {
 inline v2 operator*(v2 left, int right) {
     return {left.x*right,left.y*right};
 }
+
+
+inline v2 operator/(v2 left, float right) {
+    return {left.x/right,left.y/right};
+}
+
+
 
 inline v2 operator+(v2 left, v2 right) {
     return {left.x+right.x,left.y+right.y};
@@ -172,12 +183,33 @@ bool rects_collide(fRect a, iRect b) {
 
 
 float lerp(float a, float b, float f) {
-    return a * (1.0f-f) + (b*f);
+    return a + f * (b-a);
 }
+
+
+double lerp_d(double a, double b, double f) {
+    return a + f * (b-a);
+}
+
+
 
 v2 lerp(v2 a, v2 b, float f) {
     return {lerp(a.x,b.x,f),lerp(a.y,b.y,f)};
 }
+
+float perlin_fade(float t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+float perlin_smooth(float x) {
+    return (float)(pow(x*6,5) - pow(x*15,4) + pow(x*10,3));
+}
+
+double perlin_fade_d(double t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+
 
 struct Color {
     Color(u8 nr,u8 ng,u8 nb,u8 na=255) : r(nr),g(ng),b(nb),a(na) {}
@@ -224,7 +256,7 @@ static v2 dconvert_angle_to_vec(double angle) {
 
 // Function to determine difference between angles, accounting for wrapping (i.e. comparing 720 and 30)
 static float angle_diff(float a, float b) {
-    return PI - abs(abs(a-b) - PI);
+    return (float)PI - abs(abs(a-b) - (float)PI);
 }
 
 static v2 get_vec_to_point(v2 a, v2 b) {
@@ -237,11 +269,11 @@ static float convert_vec_to_angle(v2 a) {
 }
 
 float deg_2_rad(float d) {
-    return d * (PI/180.f);
+    return d * ((float)PI/180.f);
 }
 
 float rad_2_deg(float d) {
-    return d / (PI/180.f);
+    return d / ((float)PI/180.f);
 }
 
 
@@ -375,3 +407,4 @@ inline intersect_props get_collision(v2i from, v2 to, std::vector<segment> segme
 
     return res;
 }
+

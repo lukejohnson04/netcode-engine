@@ -348,6 +348,17 @@ Uint32 getpixel(SDL_Surface *surface, int x, int y) {
     }
 }
 
+Uint32 colorToUint32(Color color) {
+    return (Uint32)((color.a << 24) + (color.r << 16) + (color.g << 8) + (color.b << 0));
+}
+
+void setpixel(SDL_Surface *surface, int x, int y, Color color) {
+    Uint32 * const target_pixel = (Uint32 *) ((Uint8 *) surface->pixels
+                                              + y * surface->pitch
+                                              + x * surface->format->BytesPerPixel);
+    *target_pixel = colorToUint32(color);
+}
+
 
 struct character;
 struct camera_t {

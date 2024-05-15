@@ -98,10 +98,10 @@ enum GMS {
 };
 
 enum GAME_MODE {
-    GAME_MODE_STRIKE,
-    GAME_MODE_JOSHFARE,
-    GAME_MODE_JOSHUAGAME,
-    GAME_MODE_COUNT,
+    GM_STRIKE,
+    GM_JOSHFARE,
+    GM_JOSHUAGAME,
+    GM_COUNT,
 };
 
 // the reason this struct is 100% SEPARATE from game_state is because we don't want
@@ -110,7 +110,7 @@ enum GAME_MODE {
 struct overall_game_manager {
     i32 connected_players=0;
     GMS state=GAME_HASNT_STARTED;
-    GAME_MODE gmode= GAME_MODE_STRIKE;
+    GAME_MODE gmode= GM_STRIKE;
 
     int round_end_tick=-1;
 
@@ -141,15 +141,15 @@ struct netstate_info_t {
 global_variable void* transient_game_state;
 global_variable void* permanent_game_state;
 
+
 global_variable game_state gs;
-global_variable _strike_map_t mp;
+global_variable _strike_map_t _mp;
 
 
 static void add_player(character* players, i32 *player_count) {
     entity_id id = (entity_id)((*player_count)++);
     players[id] = create_player({0,0},id);
 }
-
 
 
 static void add_bullet(bullet_t *bullets, i32 *bullet_count, v2 pos, float rot, entity_id shooter_id) {
@@ -174,12 +174,12 @@ enum {
 void load_permanent_data_from_map(i32 map) {
     SDL_Surface *level_surface = IMG_Load("res/map.png");
 
-    mp = {};
+    _mp = {};
     
-    i32 &ct_spawn_count=mp.spawn_counts[COUNTER_TERRORIST];
-    v2i *ct_spawns=mp.spawns[COUNTER_TERRORIST];
-    i32 &t_spawn_count=mp.spawn_counts[TERRORIST];
-    v2i *t_spawns = mp.spawns[TERRORIST];
+    i32 &ct_spawn_count=_mp.spawn_counts[COUNTER_TERRORIST];
+    v2i *ct_spawns=_mp.spawns[COUNTER_TERRORIST];
+    i32 &t_spawn_count=_mp.spawn_counts[TERRORIST];
+    v2i *t_spawns = _mp.spawns[TERRORIST];
 
     ct_spawn_count=0;
     t_spawn_count=0;
@@ -196,27 +196,27 @@ void load_permanent_data_from_map(i32 map) {
             Uint32 data = getpixel(level_surface, x,y);
             SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
             if (col == Color(0,0,0,255)) {
-                mp.add_wall({x,y});
-                mp.tiles[x][y] = TT_WALL;
+                _mp.add_wall({x,y});
+                _mp.tiles[x][y] = TT_WALL;
             } else if (col == Color(255,0,0,255)) {
                 t_spawns[t_spawn_count++] = {x,y};
             } else if (col == Color(255,255,0,255)) {
                 ct_spawns[ct_spawn_count++] = {x,y};
             } else if (col == Color(0,0,255,255)) {
-                mp.bombsite[mp.bombsite_count++] = {x,y};
-                mp.tiles[x][y] = TT_BOMBSITE;
+                _mp.bombsite[_mp.bombsite_count++] = {x,y};
+                _mp.tiles[x][y] = TT_BOMBSITE;
             } else if (col.a == 0) {
-                mp.tiles[x][y] = TT_GROUND;
+                _mp.tiles[x][y] = TT_GROUND;
             } else if (col == Color(241,0,255)) {
-                mp.tiles[x][y] = TT_AA;
+                _mp.tiles[x][y] = TT_AA;
             } else if (col == Color(0,255,0)) {
-                mp.tiles[x][y] = TT_A;
+                _mp.tiles[x][y] = TT_A;
             } else if (col == Color(248,130,255)) {
-                mp.tiles[x][y] = TT_ARROW_UPLEFT;
+                _mp.tiles[x][y] = TT_ARROW_UPLEFT;
             } else if (col == Color(120,255,120)) {
-                mp.tiles[x][y] = TT_ARROW_UPRIGHT;
+                _mp.tiles[x][y] = TT_ARROW_UPRIGHT;
             } else {
-                mp.tiles[x][y] = TT_GROUND;
+                _mp.tiles[x][y] = TT_GROUND;
             }
         }
     }
@@ -240,10 +240,10 @@ void gamestate_load_map(overall_game_manager &gms, i32 map) {
     gs.player_count=0;
 
     i32 side_count[TEAM_COUNT]={0};    
-    i32 unused_count[TEAM_COUNT]={mp.spawn_counts[TERRORIST],mp.spawn_counts[COUNTER_TERRORIST]};
+    i32 unused_count[TEAM_COUNT]={_mp.spawn_counts[TERRORIST],_mp.spawn_counts[COUNTER_TERRORIST]};
     v2i unused_spawns[TEAM_COUNT][32];
-    memcpy(unused_spawns[TERRORIST],mp.spawns[TERRORIST],32*sizeof(v2i));
-    memcpy(unused_spawns[COUNTER_TERRORIST],mp.spawns[COUNTER_TERRORIST],32*sizeof(v2i));
+    memcpy(unused_spawns[TERRORIST],_mp.spawns[TERRORIST],32*sizeof(v2i));
+    memcpy(unused_spawns[COUNTER_TERRORIST],_mp.spawns[COUNTER_TERRORIST],32*sizeof(v2i));
 
     for (i32 ind=0; ind<gms.connected_players; ind++) {
         gs.money[ind] = FIRST_ROUND_START_MONEY;
@@ -369,13 +369,13 @@ void game_state::update(netstate_info_t &c, double delta) {
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
         bool planting_before_update = obj->curr_state == character::PLANTING;
-        update_player(obj,delta,mp.wall_count,mp.walls,player_count,players,mp.bombsite_count,mp.bombsite,tick,planted_before_tick,bomb_plant_location);
+        update_player(obj,delta,_mp.wall_count,_mp.walls,player_count,players,_mp.bombsite_count,_mp.bombsite,tick,planted_before_tick,bomb_plant_location);
     }
 
     FOR(bullets,bullet_count) {
         obj->position += obj->vel*delta;
         // if a bullet hits a wall delete it
-        FORn(mp.walls,mp.wall_count,wall) {
+        FORn(_mp.walls,_mp.wall_count,wall) {
             fRect b_hitbox = {obj->position.x,obj->position.y,16.f,16.f};
             fRect wall_rect = {wall->x*64.f,wall->y*64.f,64.f,64.f};
             if (rects_collide(b_hitbox,wall_rect)) {
@@ -474,7 +474,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
     glClear(GL_COLOR_BUFFER_BIT);
     for (i32 x=0; x<MAX_MAP_SIZE; x++) {
         for (i32 y=0; y<MAX_MAP_SIZE; y++) {
-            i32 type = mp.tiles[x][y];
+            i32 type = _mp.tiles[x][y];
             iRect dest = {x*64,y*64,64,64};
             if (rects_collide(dest,cam_rect) == false) continue;
             dest.x += cam_mod.x;
@@ -531,7 +531,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
     for (i32 ind=0; ind<gs.bullet_count; ind++) {
         iRect rect = {(int)gs.bullets[ind].position.x+cam_mod.x,(int)gs.bullets[ind].position.y+cam_mod.y,16,16};
         iRect center = {8,8};
-        float rad_rot = convert_vec_to_angle(gs.bullets[ind].vel)+PI;
+        float rad_rot = convert_vec_to_angle(gs.bullets[ind].vel)+(float)PI;
 
         GL_DrawTextureEx(gl_textures[BULLET_TEXTURE],rect,{0,0,0,0},false,false,rad_rot);
     }

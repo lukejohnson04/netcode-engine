@@ -96,7 +96,7 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             client_st.gms.counting_down_to_game_start=true;
             client_st.gms.gmode = pc.data.game_start_info.gmode;
             // start game protocol for client
-            if (client_st.gms.gmode == GAME_MODE_STRIKE) {
+            if (client_st.gms.gmode == GM_STRIKE) {
                 load_permanent_data_from_map(pc.data.game_start_info.map_id);
             }
             client_st.loaded_new_map=true;
@@ -156,9 +156,6 @@ static void client_connect(int port,std::string ip_addr) {
 
     volatile int ret = send_packet(connect_socket,&servaddr,&p);
 
-    // default interpolation delay - 100ms with default tickrate of 60
-
-    
     p = {};
     ret = recieve_packet(connect_socket,&servaddr,&p);
     printf("received packet\n");
