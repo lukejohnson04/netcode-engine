@@ -1026,7 +1026,7 @@ static void demo() {
     glBindFramebuffer(GL_FRAMEBUFFER,0);
     */
 
-    const i32 CHUNK_SIZE = 16;
+    const i32 CHUNK_SIZE = 32;
     const i32 MAP_SIZE = 8;
     
     SDL_Surface *perlin_surface = SDL_CreateRGBSurfaceWithFormat(0,CHUNK_SIZE*MAP_SIZE,CHUNK_SIZE*MAP_SIZE,32,SDL_PIXELFORMAT_ARGB8888);
@@ -1086,21 +1086,26 @@ static void demo() {
         }
     }
     */
-    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,1);
+    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,5,0.75);
 
+    /*
     for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE;x++) {
         for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE;y++) {
-            double noise = p_noise.noise(x,y);
+            double noise = MAX(MIN(p_noise.noise(x,y),1),-1);
             if (noise > 1 || noise < -1) std::cout << noise << std::endl;
             u8 val = (u8)(((noise+1)/2)*255.f);
             Color col = {val,val,val,255};
             setpixel(perlin_surface,x,y,col);            
         }
     }
+    */
 
-    GLuint gl_perlin_tex;
+    GLuint gl_perlin_tex=NULL;
+    p_noise.generate_texture(&gl_perlin_tex);
+    /*
     glGenTextures(1,&gl_perlin_tex);
     GL_load_texture_from_surface(gl_perlin_tex,perlin_surface);
+    */
     
     bool shadow_demo=true;
 

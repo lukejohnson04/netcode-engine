@@ -1,27 +1,31 @@
 
 struct perlin {
     // influence vectors at the corners of each chunk
-    std::vector<double> influence;
+    std::vector<std::vector<double>> influence;
     i32 octaves=1;
     i32 map_size;
     i32 chunk_size;
+    double persistance=0.5;
     double noise(i32 x, i32 y);
+
+    void generate_texture(GLuint *texture);
 };
 
-perlin create_perlin(i32 n_map_size, i32 n_chunk_size, i32 n_octaves) {
+perlin create_perlin(i32 n_map_size, i32 n_chunk_size, i32 n_octaves, double n_persistance) {
     perlin p;
     p.octaves = n_octaves;
     p.map_size = n_map_size;
     p.chunk_size = n_chunk_size;
-    p.influence.resize((p.map_size+1)*(p.map_size+1)*p.octaves);
-
+    p.persistance = n_persistance;
+    //p.influence.resize((p.map_size+1)*(p.map_size+1)*p.octaves);
     for (i32 octave=0;octave<p.octaves;octave++) {
-        for (i32 x=0;x<p.map_size+1;x++) {
-            for (i32 y=0;y<p.map_size+1;y++) {
-                i32 ind = octave * (p.map_size+1)*(p.map_size+1) + (x*p.map_size+1) + y;
-                p.influence[ind] = Random::Double(0,PI*2);
+        std::vector<double> gradients;
+        for (i32 x=0;x<(p.map_size*(octave+1))+1;x++) {
+            for (i32 y=0;y<(p.map_size*(octave+1))+1;y++) {
+                gradients.push_back(Random::Double(0,PI*2));
             }
         }
+        p.influence.push_back(gradients);
     }
     return p;
 }
@@ -33,25 +37,24 @@ double perlin::noise(i32 x, i32 y) {
     double maxAmplitude=0.0;
 
     for (i32 octave=0; octave<octaves; octave++) {
-        //v2i period = p.chunk_size / frequency;
+        double period = chunk_size / frequency;
         // get cx and cy, the current chunk coordinates
-        i32 chunk_x = (i32)floor(x / chunk_size);
-        i32 chunk_y = (i32)floor(y / chunk_size);
+        i32 chunk_x = (i32)floor(x / period);
+        i32 chunk_y = (i32)floor(y / period);
         // normalized coordinates within the chunk, from 0 - 1
-        double p_in_chunk_x = (x - (chunk_x*chunk_size)) / (double)chunk_size;
-        double p_in_chunk_y = (y - (chunk_y*chunk_size)) / (double)chunk_size;
+        double p_in_chunk_x = (x - (chunk_x*period)) / period;
+        double p_in_chunk_y = (y - (chunk_y*period)) / period;
 
         // the index of the beginning of the current octave in the vector of influence vectors
-        i32 influence_index_start = octave * (map_size * chunk_size+1)*(map_size * chunk_size+1);
-        i32 t1_ind = influence_index_start + (chunk_y*(map_size+1)) + chunk_x;
+        i32 t1_ind = (chunk_y*(map_size+1)) + chunk_x;
         i32 t2_ind = t1_ind+1;
         i32 t3_ind = t1_ind + (map_size+1);
         i32 t4_ind = t3_ind+1;
 
-        v2d t1_norm = {cos(influence[t1_ind]),sin(influence[t1_ind])};
-        v2d t2_norm = {cos(influence[t2_ind]),sin(influence[t2_ind])};
-        v2d t3_norm = {cos(influence[t3_ind]),sin(influence[t3_ind])};
-        v2d t4_norm = {cos(influence[t4_ind]),sin(influence[t4_ind])};
+        v2d t1_norm = {cos(influence[octave][t1_ind]),sin(influence[octave][t1_ind])};
+        v2d t2_norm = {cos(influence[octave][t2_ind]),sin(influence[octave][t2_ind])};
+        v2d t3_norm = {cos(influence[octave][t3_ind]),sin(influence[octave][t3_ind])};
+        v2d t4_norm = {cos(influence[octave][t4_ind]),sin(influence[octave][t4_ind])};
         
         v2d t1_offset = {p_in_chunk_x,p_in_chunk_y};
         v2d t2_offset = {p_in_chunk_x-1,p_in_chunk_y};
@@ -71,7 +74,32 @@ double perlin::noise(i32 x, i32 y) {
         double smooth1 = lerp_d(scalar1, scalar2, u);
         double smooth2 = lerp_d(scalar3, scalar4, u);
         double final_val = lerp_d(smooth1, smooth2, v);
-        total += final_val;
+        total += final_val * amplitude;
+
+        maxAmplitude += amplitude;
+        amplitude *= persistance;
+        frequency *= 2.0;
     }
-    return total;
+    
+    // clamp
+    return total / (maxAmplitude/2);
+}
+
+void perlin::generate_texture(GLuint *texture) {
+    if (*texture) {
+        glDeleteTextures(1,texture);
+    }
+    glGenTextures(1,texture);
+    SDL_Surface *perlin_surface = SDL_CreateRGBSurfaceWithFormat(0,chunk_size*map_size,chunk_size*map_size,32,SDL_PIXELFORMAT_ARGB8888);
+    for (i32 x=0;x<map_size*chunk_size;x++) {
+        for (i32 y=0;y<map_size*chunk_size;y++) {
+            double noise_val = MAX(MIN(noise(x,y),1.0),-1.0);
+            u8 val = (u8)(((noise_val+1)/2)*255.f);
+            Color col = {val,val,val,255};
+            setpixel(perlin_surface,x,y,col);            
+        }
+    }
+
+    GL_load_texture_from_surface(*texture,perlin_surface);
+    SDL_FreeSurface(perlin_surface);
 }
