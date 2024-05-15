@@ -1035,6 +1035,7 @@ static void demo() {
     random_engine_state = &rand;
     Random::Init();
 
+    /*
     float perlin_map[MAP_SIZE*CHUNK_SIZE][MAP_SIZE*CHUNK_SIZE];
     float normals[MAP_SIZE*CHUNK_SIZE+1][MAP_SIZE*CHUNK_SIZE+1];
     memset(perlin_map,0,sizeof(perlin_map));
@@ -1083,18 +1084,19 @@ static void demo() {
                 }
             }
         }
-    } for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE;x++) {
+    }
+    */
+    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,1);
+
+    for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE;x++) {
         for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE;y++) {
-            u8 val = (u8)(((perlin_map[x][y]+1)/2)*255.f);
+            double noise = p_noise.noise(x,y);
+            if (noise > 1 || noise < -1) std::cout << noise << std::endl;
+            u8 val = (u8)(((noise+1)/2)*255.f);
             Color col = {val,val,val,255};
             setpixel(perlin_surface,x,y,col);            
         }
     }
-    /*
-      u8 val = (u8)(((final_val+1)/2)*255.f);
-      Color col = {val,val,val,255};
-      setpixel(perlin_surface,x,y,col);
-    */
 
     GLuint gl_perlin_tex;
     glGenTextures(1,&gl_perlin_tex);
