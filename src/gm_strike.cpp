@@ -21,6 +21,7 @@ struct strike_map_t {
     };
 
     void load_permanent_data_from_map(i32 map);
+    void load_render_geometry();
 };
 
 
@@ -62,18 +63,96 @@ void strike_map_t::load_permanent_data_from_map(i32 map) {
     SDL_FreeSurface(level_surface);
 }
 
+void strike_map_t::load_render_geometry() {
+    // regenerate raycast points
+    auto &rps = client_sided_render_geometry.raycast_points;
+    rps.clear();
+    client_sided_render_geometry.segments.clear();
+    for (i32 n=0; n<wall_count; n++) {
+        v2i wall=walls[n];
+        rps.push_back(v2(wall.x,wall.y)*64);
+        rps.push_back(v2(wall.x+1,wall.y)*64);
+        rps.push_back(v2(wall.x,wall.y+1)*64);
+        rps.push_back(v2(wall.x+1,wall.y+1)*64);
+    }
+    printf("Points before: %d\n",(i32)rps.size());
+    std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+        return *(double*)&left < *(double*)&right;
+    });
+    std::unordered_map<double,int> p_set;
+    for (auto &p:rps) p_set[*(double*)&p]++;
 
-struct gm_strike {
+    // removes all points surrounded by tiles
+    for (auto pt=rps.begin();pt<rps.end();pt++) {
+        i32 dupes=0;
+        if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
+        auto it=pt;
+        while (it < rps.end()) {
+            it++;
+            if (*it == *pt) {
+                dupes++;
+            } else {
+                break;
+            }
+        }
+                    
+        if (dupes==1 || dupes == 3) {
+            rps.erase(pt,it);
+            pt--;
+        } else {
+            pt=it-1;
+        }
+                    
+    }
+                
+    for (i32 ind=0; ind<wall_count; ind++) {
+        v2 wall=walls[ind];
+        v2 p1 = v2(wall.x,wall.y)*64;
+        v2 p2 = v2(wall.x+1,wall.y)*64;
+        v2 p3 = v2(wall.x,wall.y+1)*64;
+        v2 p4 = v2(wall.x+1,wall.y+1)*64;
 
-    i32 player_count=0;
-    character players[8];
+        bool fp1 = p_set[*(double*)&p1] != 4;
+        bool fp2 = p_set[*(double*)&p2] != 4;
+        bool fp3 = p_set[*(double*)&p3] != 4;
+        bool fp4 = p_set[*(double*)&p4] != 4;
 
+        if (fp1) {
+            if (fp2)
+                client_sided_render_geometry.segments.push_back({p1,p2});
+            if (fp3)
+                client_sided_render_geometry.segments.push_back({p1,p3});
+        } if (fp4) {
+            if (fp2)
+                client_sided_render_geometry.segments.push_back({p2,p4});
+            if (fp3)
+                client_sided_render_geometry.segments.push_back({p3,p4});
+        }
+    }
+                
+    std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+        return *(double*)&left < *(double*)&right;
+    });
+
+    rps.erase(unique(rps.begin(),rps.end()),rps.end());
+                
+    printf("Points after: %d\n",(i32)rps.size());
+
+    std::sort( client_sided_render_geometry.segments.begin(), client_sided_render_geometry.segments.end(), [](auto&left,auto&right){
+        return (*(double*)&left.p1 + *(double*)&left.p2) < (*(double*)&right.p1 + *(double*)&right.p2);
+    });
+    i32 s = (i32)client_sided_render_geometry.segments.size();
+    client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
+    printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
+}
+
+
+struct gm_strike : game_state {
     i32 bullet_count=0;
     bullet_t bullets[64];
 
     // should abstract these net variables out eventually
     i32 score[8] = {0};
-    int tick=0;
 
     i32 bomb_planted_tick=0;
     entity_id bomb_planter = ID_DONT_EXIST;
@@ -105,12 +184,15 @@ struct gm_strike {
     i32 money[MAX_PLAYERS]={0};
 
     void add_bullet(v2 pos, float rot, entity_id shooter_id);
+    void add_player();
 
-    void gamestate_load_map(overall_game_manager &gms, i32 map);
+    void load_map(overall_game_manager &gms, i32 map);
     void on_bomb_plant_finished(entity_id id, i32 fin_tick);
     void on_bomb_defuse_finished(entity_id id, i32 fin_tick);
-    void game_state_end_round();
+    void end_round();
 
+    void load_up_to_tick(netstate_info_t &c, int target_tick, bool overwrite_snapshots=true);
+    void find_and_load_snapshot(netstate_info_t &c, int start_tick);
     void update(netstate_info_t &c, double delta);
     void render(character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr);
 };
@@ -122,9 +204,13 @@ void gm_strike::add_bullet(v2 pos, float rot, entity_id shooter_id) {
     bullet.shooter_id = shooter_id;
 }
 
+void gm_strike::add_player() {
+    entity_id id = (entity_id)(player_count++);
+    players[id] = create_player({0,0},id);
+}
 
 // TODO: replace _mp with mp
-void gm_strike::gamestate_load_map(overall_game_manager &gms, i32 map) {
+void gm_strike::load_map(overall_game_manager &gms, i32 map) {
     gms.state = GAME_PLAYING;
 
     bullet_count=0;
@@ -136,8 +222,9 @@ void gm_strike::gamestate_load_map(overall_game_manager &gms, i32 map) {
     round_state = ROUND_BUYTIME;
 
     strike_map_t &mp = *(strike_map_t*)permanent_game_state;
+    mp = {};
 
-    load_permanent_data_from_map(map);
+    mp.load_permanent_data_from_map(map);
     
     bool create_all_charas = player_count == gms.connected_players ? false : true;
     player_count=0;
@@ -153,11 +240,11 @@ void gm_strike::gamestate_load_map(overall_game_manager &gms, i32 map) {
         if (create_all_charas == false) {
             character old_chara = players[ind];
             
-            add_player(players,&player_count);
+            add_player();
             players[ind] = create_player({0,0},old_chara.id);
             players[ind].color = old_chara.color;
         } else {
-            add_player(players,&player_count);
+            add_player();
         
             int total_color_points=rand() % 255 + (255+200);
             players[player_count-1].color.r = (u8)(rand()%MIN(255,total_color_points));
@@ -203,10 +290,27 @@ void gm_strike::on_bomb_defuse_finished(entity_id id, i32 fin_tick) {
     bomb_planted=false;
 }
 
-void gm_strike::game_state_end_round() {
+void gm_strike::end_round() {
     round_state = ROUND_ENDTIME;
     round_end_tick = tick;
 }
+
+
+internal void on_bomb_plant_finished(entity_id id, i32 tick) {
+    gm_strike &gs = *(gm_strike*)transient_game_state;
+    gs.on_bomb_plant_finished(id,tick);
+}
+
+internal void on_bomb_defuse_finished(entity_id id, i32 tick) {
+    gm_strike &gs = *(gm_strike*)transient_game_state;
+    gs.on_bomb_defuse_finished(id,tick);
+}
+
+internal void add_bullet(v2 pos, float rot, entity_id shooter_id) {
+    gm_strike &gs = *(gm_strike*)transient_game_state;
+    gs.add_bullet(pos,rot,shooter_id);
+}
+
 
 
 void gm_strike::update(netstate_info_t &c, double delta) {
@@ -220,14 +324,14 @@ void gm_strike::update(netstate_info_t &c, double delta) {
     }
     if (c.authoritative && round_state == ROUND_ENDTIME) {
         if (tick >= round_end_tick + ROUND_ENDTIME_LENGTH*60) {
-            gamestate_load_map(c.gms,MAP_DE_DUST2);
+            load_map(c.gms,strike_map_t::MAP_DE_DUST2);
         }
     }
 
     if (bomb_planted && tick == bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
         // explode bomb
         bomb_planted=false;
-        game_state_end_round();
+        end_round();
         
         FORn(players,player_count,player) {
             double dist_to_bomb = distance_between_points(player->pos,bomb_plant_location);
@@ -318,7 +422,7 @@ void gm_strike::update(netstate_info_t &c, double delta) {
         if (!defused_before_tick) {
             if (c.authoritative) {
                 queue_sound(SfxType::BOMB_DEFUSE_FINISH_SFX,ID_SERVER,tick);
-                game_state_end_round();
+                end_round();
             }
         }
     }
@@ -332,7 +436,7 @@ void gm_strike::update(netstate_info_t &c, double delta) {
             }
         }
         if ((!bomb_planted && living[TERRORIST]==0) || living[COUNTER_TERRORIST]==0) {
-            game_state_end_round();
+            end_round();
         }
     }
 }
@@ -577,13 +681,13 @@ void gm_strike::render(character *render_from_perspective_of, camera_t *game_cam
     // gui elements
     if (round_state == ROUND_BUYTIME) {
         double time_until_start = (buytime_end_tick-tick) * (1.0/60.0);
+        std::cout << time_until_start << std::endl;
         std::string timer_str=std::to_string((int)ceil(time_until_start));;
         local_persist generic_drawable round_start_timer={};
         round_start_timer = generate_text(m5x7,timer_str,{255,0,0,255},round_start_timer.gl_texture);
         round_start_timer.scale = {2,2};
         round_start_timer.position = {1280/2-round_start_timer.get_draw_irect().w/2,24};
         GL_DrawTexture(round_start_timer.gl_texture,round_start_timer.get_draw_irect());
-        std::cout << timer_str << std::endl;
 
     } else if (round_state == ROUND_PLAYING && bomb_planted) {
         double time_until_detonation = (bomb_planted_tick+(BOMB_TIME_TO_DETONATE*60) - tick) * (1.0/60.0);
@@ -596,4 +700,3 @@ void gm_strike::render(character *render_from_perspective_of, camera_t *game_cam
     }
 
 }
-

@@ -35,6 +35,53 @@ enum PACKET_TYPE {
 };
 
 
+// snapshots are for sending just the local data
+struct snapshot_t {
+    char data[sizeof(gm_strike)];
+    //game_state gms;
+    i32 last_processed_command_tick[16];
+    i32 map;
+};
+
+
+
+// loads the first snapshot found before the input time
+void game_state_find_and_load_snapshot(game_state *gs, netstate_info_t &c, int start_tick) {
+    for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
+        game_state &snap = *(game_state*)c.snapshots[ind].data;
+        if (snap.tick<=start_tick) {
+            *gs = snap;
+            return;
+        }
+    }
+    printf("ERROR: Couldn't find snapshot to rewind to %d!\n",start_tick);
+}
+
+void game_state_load_up_to_tick(game_state *gs, netstate_info_t &c, int target_tick, i32 gmode, bool overwrite_snapshots=true) {
+    i32 iter=0;
+    while(gs->tick<target_tick) {
+        // should this be before or after???
+        // after i think because this function shouldn't have to worry about previous ticks
+        // crazy inefficient lol
+        // TODO: fix this
+        if (overwrite_snapshots) {
+            for (snapshot_t &snap: c.snapshots) {
+                game_state &s_gs = *(game_state*)snap.data;
+                if (s_gs.tick==gs->tick) {
+                    s_gs = *gs;
+                    break;
+                }
+            }
+        }
+        if (gmode == GAME_MODE::GM_STRIKE) {
+            ((gm_strike*)gs)->update(c,1.0/60.0);
+        }
+        gs->tick++;
+        iter++;
+    }
+}
+
+
 // just assume all packets are 1KB for now lol
 struct packet_t {
     u8 type;

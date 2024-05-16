@@ -183,6 +183,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #include "network.cpp"
 #include "server.cpp"
 #include "client.cpp"
+#include "chatbox.cpp"
 
 
 static void GameGUIStart() {
@@ -229,6 +230,8 @@ static void GameGUIStart() {
         generic_drawable ability_ui_box;
         generic_drawable magazine_cnt_text;
         generic_drawable money_text;
+        i32 p_health_before_update=0;
+        i32 p_money_before_update=0;
     } gui_elements;
     gui_elements.health_text = generate_text(m5x7,"100",{255,0,0,255});
     gui_elements.health_text.scale = {2,2};
@@ -252,23 +255,21 @@ static void GameGUIStart() {
     camera_t game_camera;
 
     // WAY too big its like 8kb lol
-    printf("gamestate size: %d\n",(i32)sizeof(game_state));
+    printf("gamestate size: %d \n",(i32)sizeof(game_state));
 
-    gm_strike gamestate = {};
-    strike_map_t map={};
-    transient_game_state = (void*)&gamestate;
-    permanent_game_state = (void*)&map;
+    // stack gm data
+    char gm_stack_data[sizeof(gm_strike)];
+    char mp_stack_data[sizeof(strike_map_t)];
+    
+    transient_game_state = (void*)&gm_stack_data;
+    permanent_game_state = (void*)&mp_stack_data;
     
     while (running) {
         // input
         PollEvents(&input,&running);
-        character *player=nullptr;
-        //gm_strike &gs = *(gm_strike*)transient_game_state;
-        if (gs.players[client_st.client_id].id != ID_DONT_EXIST) {
-            player = &gs.players[client_st.client_id];
-        }
 
         if (client_st.gms.state == GMS::GAME_PLAYING) {
+            game_state &gs = *(game_state*)transient_game_state;
             if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
                 client_st.NetState.interp_delay--;
                 // TODO: pull interp delay out of netstate and put it in client_t
@@ -281,12 +282,22 @@ static void GameGUIStart() {
                 printf("Changed interp delay to %d\n",client_st.NetState.interp_delay);
             }
             
-            i32 prev_wall_count=_mp.wall_count;
-            update_player_controller(player,target_tick,&game_camera);
+            character *player=nullptr;
+            gm_strike &gs2 = *(gm_strike*)transient_game_state;
+            strike_map_t &_mp2 = *(strike_map_t*)mp_stack_data;
+            if (gs2.players[client_st.client_id].id != ID_DONT_EXIST) {
+                player = &gs2.players[client_st.client_id];
+            }
+            
+            if (player) {
+                update_player_controller(player,target_tick,&game_camera);
+            }
             
             bool update_health_display=false;
-            int p_health_before_update = player ? player->health : 0;
-            int p_money_before_update = player ? gs.money[player->id] : 0;
+            if (client_st.gms.gmode == GAME_MODE::GM_STRIKE) {
+                gui_elements.p_health_before_update = player ? player->health : 0;
+                gui_elements.p_money_before_update = player ? gs2.money[player->id] : 0;
+            }
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
@@ -325,26 +336,28 @@ static void GameGUIStart() {
                 std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](auto&left,auto&right) {
                     return ((game_state*)left.data)->tick < ((game_state*)right.data)->tick;//left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
                 });
-                gs = *(game_state*)client_st.NetState.snapshots.back().data;
-                /*
-                for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
-                    if (snap->gms.tick <= target_tick-5) {
-                        gs = snap->gms;
-                        break;
-                    }
+                if (client_st.gms.gmode == GAME_MODE::GM_STRIKE) {
+                    gs2 = *(gm_strike*)client_st.NetState.snapshots.back().data;
                 }
+                /*
+                  for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
+                  if (snap->gms.tick <= target_tick-5) {
+                  gs = snap->gms;
+                  break;
+                  }
+                  }
                 */
                 
         snapshot_merge_finish:
                 
                 /*for (auto snap=snapshots.begin();snap<snapshots.end();snap++) {
-                    if (snap->gms.tick < target_tick - 180) {
-                        snap = snapshots.erase(snap);
-                        snap--;
-                    } else {
-                        break;
-                    }
-                    }*/
+                  if (snap->gms.tick < target_tick - 180) {
+                  snap = snapshots.erase(snap);
+                  snap--;
+                  } else {
+                  break;
+                  }
+                  }*/
                 //client_st.NetState.snapshots.clear();
                 ReleaseMutex(client_st._mt_merge_snapshots);
             }
@@ -359,21 +372,27 @@ static void GameGUIStart() {
                 }
                 ReleaseMutex(client_st._mt_merge_chat);
             }
-            
-            while(gs.tick<target_tick) {
-                gs.update(client_st.NetState,tick_delta);
+
+            game_state_load_up_to_tick(&gs,client_st.NetState,target_tick,client_st.gms.gmode,false);
+
+            /*while(gs.tick<target_tick) {
+                if (client_
+                gs.update(client_st.NetState,client_st.gms.gmode,tick_delta);
                 gs.tick++;
             }
-            
-            if (gs.bomb_planted && target_tick >= gs.bomb_planted_tick && target_tick < gs.bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
-                client_st.bomb_tick_timer -= (target_tick - o_num) * tick_delta;
-                if (client_st.bomb_tick_timer <= 0) {
-                    play_sfx(SfxType::BOMB_BEEP_SFX);
-                    double percentage_of_bomb_left = 1.0 - ((double)(target_tick-gs.bomb_planted_tick)/(double)(BOMB_TIME_TO_DETONATE*60));
-                    double time_to_next = 0.1 + 1.0 * percentage_of_bomb_left;
-                    time_to_next = MAX(time_to_next,0.15);
+            */
+
+            if (client_st.gms.gmode == GAME_MODE::GM_STRIKE) {
+                if (gs2.bomb_planted && target_tick >= gs2.bomb_planted_tick && target_tick < gs2.bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
+                    client_st.bomb_tick_timer -= (target_tick - o_num) * tick_delta;
+                    if (client_st.bomb_tick_timer <= 0) {
+                        play_sfx(SfxType::BOMB_BEEP_SFX);
+                        double percentage_of_bomb_left = 1.0 - ((double)(target_tick-gs2.bomb_planted_tick)/(double)(BOMB_TIME_TO_DETONATE*60));
+                        double time_to_next = 0.1 + 1.0 * percentage_of_bomb_left;
+                        time_to_next = MAX(time_to_next,0.15);
                     
-                    client_st.bomb_tick_timer += time_to_next;
+                        client_st.bomb_tick_timer += time_to_next;
+                    }
                 }
             }
 
@@ -484,87 +503,8 @@ static void GameGUIStart() {
             }
             
             if (client_st.loaded_new_map) {
+                _mp2.load_render_geometry();
                 client_st.loaded_new_map=false;
-                // regenerate raycast points
-                auto &rps = client_sided_render_geometry.raycast_points;
-                rps.clear();
-                client_sided_render_geometry.segments.clear();
-                for (i32 n=0; n<_mp.wall_count; n++) {
-                    v2i wall=_mp.walls[n];
-                    rps.push_back(v2(wall.x,wall.y)*64);
-                    rps.push_back(v2(wall.x+1,wall.y)*64);
-                    rps.push_back(v2(wall.x,wall.y+1)*64);
-                    rps.push_back(v2(wall.x+1,wall.y+1)*64);
-                }
-                printf("Points before: %d\n",(i32)rps.size());
-                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
-                    return *(double*)&left < *(double*)&right;
-                });
-                std::unordered_map<double,int> p_set;
-                for (auto &p:rps) p_set[*(double*)&p]++;
-
-                // removes all points surrounded by tiles
-                for (auto pt=rps.begin();pt<rps.end();pt++) {
-                    i32 dupes=0;
-                    if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
-                    auto it=pt;
-                    while (it < rps.end()) {
-                        it++;
-                        if (*it == *pt) {
-                            dupes++;
-                        } else {
-                            break;
-                        }
-                    }
-                    
-                    if (dupes==1 || dupes == 3) {
-                        rps.erase(pt,it);
-                        pt--;
-                    } else {
-                        pt=it-1;
-                    }
-                    
-                }
-                
-                for (i32 ind=0; ind<_mp.wall_count; ind++) {
-                    v2 wall=_mp.walls[ind];
-                    v2 p1 = v2(wall.x,wall.y)*64;
-                    v2 p2 = v2(wall.x+1,wall.y)*64;
-                    v2 p3 = v2(wall.x,wall.y+1)*64;
-                    v2 p4 = v2(wall.x+1,wall.y+1)*64;
-
-                    bool fp1 = p_set[*(double*)&p1] != 4;
-                    bool fp2 = p_set[*(double*)&p2] != 4;
-                    bool fp3 = p_set[*(double*)&p3] != 4;
-                    bool fp4 = p_set[*(double*)&p4] != 4;
-
-                    if (fp1) {
-                        if (fp2)
-                            client_sided_render_geometry.segments.push_back({p1,p2});
-                        if (fp3)
-                            client_sided_render_geometry.segments.push_back({p1,p3});
-                    } if (fp4) {
-                        if (fp2)
-                            client_sided_render_geometry.segments.push_back({p2,p4});
-                        if (fp3)
-                            client_sided_render_geometry.segments.push_back({p3,p4});
-                    }
-                }
-                
-                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
-                    return *(double*)&left < *(double*)&right;
-                });
-
-                rps.erase(unique(rps.begin(),rps.end()),rps.end());
-                
-                printf("Points after: %d\n",(i32)rps.size());
-
-                std::sort( client_sided_render_geometry.segments.begin(), client_sided_render_geometry.segments.end(), [](auto&left,auto&right){
-                    return (*(double*)&left.p1 + *(double*)&left.p2) < (*(double*)&right.p1 + *(double*)&right.p2);
-                });
-                i32 s = (i32)client_sided_render_geometry.segments.size();
-                client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
-                printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
 
             
@@ -577,8 +517,8 @@ static void GameGUIStart() {
 
             
             // DRAW BEGIN
-            if (player) {
-                if (player->health != p_health_before_update) {
+            if (client_st.gms.gmode == GAME_MODE::GM_STRIKE && player) {
+                if (player->health != gui_elements.p_health_before_update) {
                     gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
                     gui_elements.health_text.scale = {2,2};
                     gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_irect().h)};
@@ -592,177 +532,37 @@ static void GameGUIStart() {
                     gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
                 }
                 // draw money
-                if (gs.money[player->id] != p_money_before_update) {
-                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
+                if (gs2.money[player->id] != gui_elements.p_money_before_update) {
+                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs2.money[player->id])+"huh",{0,255,100,255});
                     gui_elements.money_text.scale = {2,2};
                     gui_elements.money_text.position = {16,16};
                 }
-            }
-
-            render_game_state(player,&game_camera);
-            glUseProgram(sh_textureProgram);
-            // gui
-            GL_DrawTexture(gui_elements.money_text.gl_texture,gui_elements.money_text.get_draw_irect());
-            GL_DrawTexture(gui_elements.health_text.gl_texture,gui_elements.health_text.get_draw_irect());
-            if (player) {
-                if (player->reloading) {
-                    GL_DrawTexture(gui_elements.reload_text.gl_texture,gui_elements.reload_text.get_draw_irect());
+                gs2.render(player,&game_camera);
+                glUseProgram(sh_textureProgram);
+                // gui
+                GL_DrawTexture(gui_elements.money_text.gl_texture,gui_elements.money_text.get_draw_irect());
+                GL_DrawTexture(gui_elements.health_text.gl_texture,gui_elements.health_text.get_draw_irect());
+                if (player) {
+                    if (player->reloading) {
+                        GL_DrawTexture(gui_elements.reload_text.gl_texture,gui_elements.reload_text.get_draw_irect());
+                    }
                 }
-            }
-
-            /*
-            // render the score at the end of the round
-            if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
-                std::string left_str = std::to_string(gs.score[0]);
-                std::string right_str = std::to_string(gs.score[1]);
-                generic_drawable middle_text = generate_text(m5x7,"-",{0,0,0,255});
-                generic_drawable left_text = generate_text(m5x7,left_str,*(SDL_Color*)&gs.players[0].color);
-                generic_drawable right_text = generate_text(m5x7,right_str,*(SDL_Color*)&gs.players[1].color);
-                
-                middle_text.scale = {16,16};
-                left_text.scale = {16,16};
-                right_text.scale = {16,16};
-                middle_text.position = {1280/2 - middle_text.get_draw_rect().w/2,720/2+middle_text.get_draw_rect().h/2};
-                left_text.position = {middle_text.position.x - left_text.get_draw_rect().w-16,middle_text.position.y};
-                right_text.position = {middle_text.position.x + middle_text.get_draw_rect().w+16,middle_text.position.y};
-
-                SDL_Rect left_rect,middle_rect,right_rect;
-                left_rect = left_text.get_draw_rect();
-                middle_rect = middle_text.get_draw_rect();
-                right_rect = right_text.get_draw_rect();
-                SDL_RenderCopy(sdl_renderer,left_text.texture,NULL,&left_rect);
-                SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_rect);
-                SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_rect);
+                // buy menu
+                if (gs2.round_state == ROUND_BUYTIME) {
+                    local_persist bool is_buy_menu_open = false;
+                    if (input.just_pressed[SDL_SCANCODE_B]) {
+                        is_buy_menu_open = !is_buy_menu_open;
+                    } if (is_buy_menu_open) {
+                        i32 width = 800;
+                        i32 height = 620;
+                        iRect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
+                        GL_DrawTexture(gl_textures[BUY_MENU_TEXTURE],dest);
+                    }
+                }
             }
 
             
-            if (player) {
-                // draw abilities
-                generic_drawable cooldown_text;
-                std::string cooldown_str;
-                for (i32 ind=0;ind<4;ind++) {
-                    generic_drawable *sprite=&gui_elements.ability_sprites[ind];
-
-                    // render the box
-                    SDL_Rect dest = sprite->get_draw_rect();
-                    SDL_Rect sp_rect = sprite->get_draw_rect();
-                    SDL_RenderCopy(sdl_renderer,textures[TexType::UI_TEXTURE],NULL,&dest);
-                    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sp_rect);
-                    if (ind==0 && player->invisibility_cooldown > 0) {
-                        render_ability_sprite(sprite,player->invisibility_cooldown);
-                    } else if (ind == 1 && player->shield_cooldown > 0) {
-                        render_ability_sprite(sprite,player->shield_cooldown);
-                    } else if (ind == 2 && player->fireburst_cooldown > 0) {
-                        render_ability_sprite(sprite,player->fireburst_cooldown);
-                    } else if (ind == 3 && player->reloading) {
-                        render_ability_sprite(sprite,player->reload_timer);
-                    }
-                }
-                local_persist i32 ammo_cnt = 0;
-                if (player->bullets_in_mag != ammo_cnt) {
-                    ammo_cnt = player->bullets_in_mag;
-                    std::string ammo_str = std::to_string(ammo_cnt);
-                    gui_elements.magazine_cnt_text = generate_text(m5x7,ammo_str,{255,255,255,255});
-                    gui_elements.magazine_cnt_text.scale = {4,4};
-                    auto ab_pos = gui_elements.ability_sprites[3].get_draw_rect();
-                    gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
-                }
-                SDL_Rect ammo_rect = gui_elements.magazine_cnt_text.get_draw_rect();
-                SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&ammo_rect);
-            }
-            */
-            // buy menu
-            if (gs.round_state == ROUND_BUYTIME) {
-                local_persist bool is_buy_menu_open = false;
-                if (input.just_pressed[SDL_SCANCODE_B]) {
-                    is_buy_menu_open = !is_buy_menu_open;
-                } if (is_buy_menu_open) {
-                    i32 width = 800;
-                    i32 height = 620;
-                    iRect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
-                    GL_DrawTexture(gl_textures[BUY_MENU_TEXTURE],dest);
-                    //SDL_RenderCopy(sdl_renderer,textures[BUY_MENU_TEXTURE],NULL,&dest);
-                }
-            }
-            
-
-            local_persist bool chatbox_isopen=false;
-            local_persist std::string chatbox_text="";
-            if (chatbox_isopen == false && input.just_pressed[SDL_SCANCODE_T]) {
-                chatbox_isopen = true;
-                SDL_StartTextInput();
-                input.text_input_captured=true;
-                input.input_field = &chatbox_text;
-                input.text_modified=true;
-
-            } else if (chatbox_isopen && input.just_pressed[SDL_SCANCODE_ESCAPE]) {
-                chatbox_isopen=false;
-                SDL_StopTextInput();
-                input.text_input_captured=false;
-                input.input_field = nullptr;
-            }
-
-            if (chatbox_isopen) {
-                // if you press the enter key, submit that field!
-                iRect text_input_rect = {48,500+40,400,36};
-                glUseProgram(sh_colorProgram);
-                GL_DrawRect(text_input_rect,{255,255,255,100});
-
-                local_persist generic_drawable chatbox_entry;
-                if (input.text_submitted) {
-                    // send to server
-                    packet_t p = {};
-                    p.type = CHAT_MESSAGE;
-
-                    strcpy_s(p.data.chat_message.message,MAX_CHAT_MESSAGE_LENGTH,chatbox_text.c_str());
-                    strcpy_s(p.data.chat_message.name,MAX_USERNAME_LENGTH,client_st.username.c_str());
-                    // ought to put this in the client tick code? idk man. doesn't matter too much tho
-                    send_packet(client_st.socket,&client_st.servaddr,&p);
-                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display);
-                    //add_to_chatlog("Luke","Hello",target_tick,&chatlog_display);
-
-                    //add_to_chatlog("Luke",chatbox_text,target_tick,&chatlog_display);
-                    chatbox_text="";
-                    chatbox_isopen=false;
-                    
-                    SDL_StopTextInput();
-                    input.text_submitted = false;
-                    input.text_input_captured=false;
-                    input.input_field = nullptr;
-                } else if (input.text_modified) {
-                    
-                    chatbox_entry = generate_text(m5x7,chatbox_text==""?" ":chatbox_text,{255,255,255,255},chatbox_entry.gl_texture);
-                    chatbox_entry.scale = {1,1};
-                    chatbox_entry.position = {text_input_rect.x + 4, text_input_rect.y + text_input_rect.h - chatbox_entry.get_draw_irect().h-4};
-                }
-
-                if (chatbox_entry.gl_texture) {
-                    glUseProgram(sh_textureProgram);
-                    GL_DrawTexture(chatbox_entry.gl_texture,chatbox_entry.get_draw_irect());
-                }
-            }
-
-            glUseProgram(sh_textureProgram);
-            /*
-            GLuint colUni = glGetUniformLocation(sh_textureProgram, "color");
-            glUniform4f(colUni,255,255,255,255);
-            */
-            for (i32 ind=chatlog.entry_count-1;ind>=0;ind--) {
-                i32 fade_start_tick = chatlog.tick_added[ind]+(CHAT_MESSAGE_DISPLAY_TIME*60);
-                i32 fade_end_tick = fade_start_tick + (CHAT_FADE_LEN * 60);
-                if (true || target_tick < fade_end_tick) {
-                    if (false && target_tick > fade_start_tick) {
-                        // fade out
-                        u8 a = 255 - (u8)(((double)(target_tick - fade_start_tick) / (double)(fade_end_tick - fade_start_tick)) * 255.0);
-                        //glUniform4f(colUni,255,255,255,a);
-                    } else {
-                        //glUniform4f(colUni,255,255,255,255);
-                    }
-                    iRect dest = chatlog_display.sprites[ind].get_draw_irect();
-                    // TODO: why TF is this width and height constantly stuck at 0???
-                    GL_DrawTexture(chatlog_display.sprites[ind].gl_texture,dest);
-                }
-            }
+            client_update_chatbox(target_tick);
             
             // visualize net data
             local_persist bool visualize_netgraph=true;
@@ -850,7 +650,6 @@ static void GameGUIStart() {
                 glUseProgram(sh_textureProgram);
                 GL_DrawTexture(curr_tick.gl_texture,curr_tick.get_draw_irect());
                 GL_DrawTexture(last_proc.gl_texture,last_proc.get_draw_irect());
-                
             }
         } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
@@ -874,11 +673,6 @@ static void GameGUIStart() {
             }
 
             render_pregame_screen(client_st.gms,time_to_start);
-            // render player color selector
-            /*SDL_Rect p_rect = {0,0,32,32};
-            SDL_Rect dest_rect = {200,500,64,64};
-            SDL_RenderCopy(sdl_renderer,textures[TexType::PLAYER_TEXTURE],&p_rect,&dest_rect);
-            */
         }
 
 endof_frame:

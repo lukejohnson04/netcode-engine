@@ -97,7 +97,8 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
             client_st.gms.gmode = pc.data.game_start_info.gmode;
             // start game protocol for client
             if (client_st.gms.gmode == GM_STRIKE) {
-                load_permanent_data_from_map(pc.data.game_start_info.map_id);
+                strike_map_t &mp = *(strike_map_t*)permanent_game_state;
+                mp.load_permanent_data_from_map(pc.data.game_start_info.map_id);
             }
             client_st.loaded_new_map=true;
 

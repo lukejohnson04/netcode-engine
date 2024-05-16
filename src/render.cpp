@@ -662,3 +662,22 @@ void GL_DrawTextureEx(GLuint texture, iRect dest={0,0,0,0}, iRect src={0,0,0,0},
     model = glm::mat4(1.0f);
     glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(model));
 }
+
+v2 pp;
+int collision_point_sort(const void *v1, const void*v2) {
+    v2i p1 = *(v2i*)v1;
+    v2i p2 = *(v2i*)v2;
+
+    return (int)((get_angle_to_point(pp,p1)-get_angle_to_point(pp,p2))*1000.f);
+}
+
+struct col_target {
+    v2 pt;
+    double angle;
+};
+
+
+struct {
+    std::vector<v2> raycast_points;
+    std::vector<segment> segments;
+} client_sided_render_geometry;

@@ -244,6 +244,13 @@ static void server(int port) {
     camera_t game_camera;
 
     draw_shadows=false;
+
+    char gm_stack_data[sizeof(gm_strike)];
+    char mp_stack_data[sizeof(strike_map_t)];
+    
+    transient_game_state = (void*)&gm_stack_data;
+    permanent_game_state = (void*)&mp_stack_data;
+
     
     // tick thread
     while (running) {
@@ -252,6 +259,8 @@ static void server(int port) {
         if (gl_server.gms.state == GMS::GAME_PLAYING) {
             target_tick = gl_server.get_target_tick();
             gl_server.last_tick=target_tick;
+
+            game_state &gs = *(game_state*)transient_game_state;
 
             if (snap_clock.get() > snap_delta) {
                 PollEvents(&input,&running);
@@ -295,9 +304,9 @@ static void server(int port) {
                         if (gs.tick-earliest_new_cmd_tick > 180) {
                             printf("WARNING: Loading 3 seconds back in time!!!\n");
                         }
-                        find_and_load_gamestate_snapshot(gs,gl_server.NetState,earliest_new_cmd_tick);
+                        game_state_find_and_load_snapshot(&gs,gl_server.NetState,earliest_new_cmd_tick);
                         // NOTE: check if we can comment this out
-                        load_game_state_up_to_tick((void*)&gs,gl_server.NetState,tick_before);
+                        game_state_load_up_to_tick(&gs,gl_server.NetState,gl_server.gms.gmode,tick_before);
                     }
                     
             command_merge_finish:
@@ -306,7 +315,7 @@ static void server(int port) {
                 
                 
                 if (target_tick-snapshot_buffer >= 0) {
-                    load_game_state_up_to_tick((void*)&gs,gl_server.NetState,target_tick-snapshot_buffer);
+                    game_state_load_up_to_tick(&gs,gl_server.NetState,target_tick-snapshot_buffer,gl_server.gms.gmode);
 
                     {
                         snapshot_t snap = {};
@@ -334,9 +343,9 @@ static void server(int port) {
                             if (update_tick<0) continue;
 
                             if (update_tick<gs.tick) {
-                                find_and_load_gamestate_snapshot(gs,gl_server.NetState,update_tick);
+                                game_state_find_and_load_snapshot(&gs,gl_server.NetState,update_tick);
                             }
-                            load_game_state_up_to_tick((void*)&gs,gl_server.NetState,update_tick,true);
+                            game_state_load_up_to_tick(&gs,gl_server.NetState,update_tick,gl_server.gms.gmode,true);
                             gms = gs;
                         }
                         p.data.snapshot.last_processed_command_tick[client_id] = last_proc_command;
@@ -373,44 +382,47 @@ static void server(int port) {
                 }
                 new_frame_ready=true;
 
-                if (input.just_pressed[SDL_SCANCODE_P]) {
-                    if (spectate_player == ID_DONT_EXIST) {
-                        if (gs.player_count>0) {
-                            spectate_player = 0;
-                        }
-                    } else {
-                        spectate_player++;
-                        if (spectate_player >= gs.player_count) {
-                            spectate_player = ID_DONT_EXIST;
-                        }
-                    }
-                }
-                if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
-                    snapshot_buffer--;
-                    snapshot_buffer = MAX(snapshot_buffer,0);
-                    printf("Changed snapshot buffer to %d\n",snapshot_buffer);
-                } else if (input.just_pressed[SDL_SCANCODE_RIGHTBRACKET]) {
-                    snapshot_buffer++;
-                    printf("Changed snapshot buffer to %d\n",snapshot_buffer);
-                }
 
-                if (spectate_player != ID_DONT_EXIST) {
-                    game_camera.follow = &gs.players[spectate_player];
-                    game_camera.pos = game_camera.follow->pos;
-                } else {
-                    v2 mvec={0,0};
-                    if (input.is_pressed[SDL_SCANCODE_D]) {
-                        mvec.x = 5;
-                    } if (input.is_pressed[SDL_SCANCODE_A]) {
-                        mvec.x = -5;
-                    } if (input.is_pressed[SDL_SCANCODE_S]) {
-                        mvec.y = 5;
-                    } if (input.is_pressed[SDL_SCANCODE_W]) {
-                        mvec.y = -5;
+                if (gl_server.gms.gmode == GAME_MODE::GM_STRIKE) {
+                    if (input.just_pressed[SDL_SCANCODE_P]) {
+                        if (spectate_player == ID_DONT_EXIST) {
+                            if (((gm_strike*)(&gs))->player_count>0) {
+                                spectate_player = 0;
+                            }
+                        } else {
+                            spectate_player++;
+                            if (spectate_player >= ((gm_strike*)(&gs))->player_count) {
+                                spectate_player = ID_DONT_EXIST;
+                            }
+                        }
                     }
-                    game_camera.pos += mvec;
+                    if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
+                        snapshot_buffer--;
+                        snapshot_buffer = MAX(snapshot_buffer,0);
+                        printf("Changed snapshot buffer to %d\n",snapshot_buffer);
+                    } else if (input.just_pressed[SDL_SCANCODE_RIGHTBRACKET]) {
+                        snapshot_buffer++;
+                        printf("Changed snapshot buffer to %d\n",snapshot_buffer);
+                    }
+
+                    if (spectate_player != ID_DONT_EXIST) {
+                        game_camera.follow = &((gm_strike*)(&gs))->players[spectate_player];
+                        game_camera.pos = game_camera.follow->pos;
+                    } else {
+                        v2 mvec={0,0};
+                        if (input.is_pressed[SDL_SCANCODE_D]) {
+                            mvec.x = 5;
+                        } if (input.is_pressed[SDL_SCANCODE_A]) {
+                            mvec.x = -5;
+                        } if (input.is_pressed[SDL_SCANCODE_S]) {
+                            mvec.y = 5;
+                        } if (input.is_pressed[SDL_SCANCODE_W]) {
+                            mvec.y = -5;
+                        }
+                        game_camera.pos += mvec;
+                    }
                 }
-                render_game_state(game_camera.follow,&game_camera);
+                ((gm_strike*)(&gs))->render(game_camera.follow,&game_camera);
             }
         } else if (gl_server.gms.state == GMS::PREGAME_SCREEN) {
             PollEvents(&input,&running);
@@ -428,8 +440,12 @@ static void server(int port) {
                 new_frame_ready=true;
                 LARGE_INTEGER curr = gl_server.timer.get_high_res_elapsed();
                 if (gl_server.gms.game_start_time.QuadPart - curr.QuadPart <= 0) {
-                    // game_start
-                    gamestate_load_map(gl_server.gms,MAP_DE_DUST2);
+                    if (gl_server.gms.gmode == GAME_MODE::GM_STRIKE) {
+                        // game_start
+                        *((gm_strike*)(transient_game_state)) = {};
+                        *((strike_map_t*)(permanent_game_state)) = {};
+                        ((gm_strike*)(transient_game_state))->load_map(gl_server.gms,strike_map_t::MAP_DE_DUST2);
+                    }
 
                     // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
@@ -459,7 +475,7 @@ static void server(int port) {
                     packet_t p = {};
                     p.type = GAME_START_ANNOUNCEMENT;
                     p.data.game_start_info.start_time = gl_server.gms.game_start_time;
-                    p.data.game_start_info.map_id = MAP_DE_DUST2;
+                    p.data.game_start_info.map_id = strike_map_t::MAP_DE_DUST2;
                     p.data.game_start_info.gmode = gl_server.gms.gmode;
                     broadcast(&p);
                     gl_server.gms.counting_down_to_game_start=true;

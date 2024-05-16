@@ -156,7 +156,7 @@ character create_player(v2 pos,entity_id nid) {
     return p;
 }
 
-static void add_bullet(v2 pos, float rot, entity_id shooter_id);
+internal void add_bullet(v2 pos, float rot, entity_id shooter_id);
 
 void player_take_damage(character *player, int dmg) {
     player->health -= dmg;
