@@ -8,6 +8,7 @@ struct perlin {
     double persistance=0.5;
     double noise(i32 x, i32 y);
 
+    SDL_Surface *generate_surface();
     void generate_texture(GLuint *texture);
 };
 
@@ -82,7 +83,20 @@ double perlin::noise(i32 x, i32 y) {
     }
     
     // clamp
-    return total / (maxAmplitude/2);
+    return total;
+}
+
+SDL_Surface *perlin::generate_surface() {
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0,chunk_size*map_size,chunk_size*map_size,32,SDL_PIXELFORMAT_ARGB8888);
+    for (i32 x=0;x<map_size*chunk_size;x++) {
+        for (i32 y=0;y<map_size*chunk_size;y++) {
+            double noise_val = MAX(MIN(noise(x,y),1.0),-1.0);
+            u8 val = (u8)(((noise_val+1)/2)*255.f);
+            Color col = {val,val,val,255};
+            setpixel(surface,x,y,col);            
+        }
+    }
+    return surface;
 }
 
 void perlin::generate_texture(GLuint *texture) {
@@ -90,16 +104,8 @@ void perlin::generate_texture(GLuint *texture) {
         glDeleteTextures(1,texture);
     }
     glGenTextures(1,texture);
-    SDL_Surface *perlin_surface = SDL_CreateRGBSurfaceWithFormat(0,chunk_size*map_size,chunk_size*map_size,32,SDL_PIXELFORMAT_ARGB8888);
-    for (i32 x=0;x<map_size*chunk_size;x++) {
-        for (i32 y=0;y<map_size*chunk_size;y++) {
-            double noise_val = MAX(MIN(noise(x,y),1.0),-1.0);
-            u8 val = (u8)(((noise_val+1)/2)*255.f);
-            Color col = {val,val,val,255};
-            setpixel(perlin_surface,x,y,col);            
-        }
-    }
 
+    SDL_Surface *perlin_surface = generate_surface();
     GL_load_texture_from_surface(*texture,perlin_surface);
     SDL_FreeSurface(perlin_surface);
 }

@@ -26,12 +26,14 @@ enum TexType {
 
 enum VaoType {
     TEXTURE_VAO,
+    SHAPE_VAO,
     SHADOW_VAO,
     VAO_COUNT
 };
 
 enum VboType {
     TEXTURE_VBO,
+    SHAPE_VBO,
     SHADOW_VBO,
     VBO_COUNT
 };
@@ -514,6 +516,29 @@ void GL_DrawRect(iRect rect, Color color=COLOR_BLACK) {
     glBindBuffer(GL_ARRAY_BUFFER,0);
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     glBindVertexArray(0);    
+}
+
+void GL_DrawLine(v2 p1, v2 p2, Color color=COLOR_RED) {
+    float line_vertices[] = {
+        p1.x,p1.y,0.0f,
+        p2.x,p2.y,0.0f
+    };
+
+    glUseProgram(sh_colorProgram);
+    GLuint colUni = glGetUniformLocation(sh_colorProgram, "color");
+    float colorF[] = {(float)color.r/255.f,(float)color.g/255.f,(float)color.b/255.f,(float)color.a/255.f};
+    glUniform4f(colUni, colorF[0],colorF[1],colorF[2],colorF[3]);
+
+    glBindVertexArray(gl_varrays[SHAPE_VAO]);
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbuffers[SHAPE_VBO]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(line_vertices), line_vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glDrawArrays(GL_LINES,0,2);
+
+    glBindVertexArray(0);
 }
 
 

@@ -212,6 +212,7 @@ double perlin_fade_d(double t) {
 
 
 struct Color {
+    Color() {}
     Color(u8 nr,u8 ng,u8 nb,u8 na=255) : r(nr),g(ng),b(nb),a(na) {}
     u8 r,g,b,a;
 };

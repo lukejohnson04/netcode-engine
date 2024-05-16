@@ -1,4 +1,5 @@
 
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -778,11 +779,6 @@ static void GameGUIStart() {
                 int padding=20;
                 glUseProgram(sh_colorProgram);
                 GL_DrawRect(graph_box_rect,{255,255,255,255});
-                /*
-                SDL_SetRenderDrawColor(sdl_renderer,255,255,255,255);
-                SDL_RenderFillRect(sdl_renderer,&graph_box_rect);
-                */
-                //SDL_SetRenderDrawColor(sdl_renderer,0,0,0,255);
                 
                 i32 timeline_x = graph_box_rect.x;
                 i32 timeline_y = graph_box_rect.y + graph_box_rect.h/2;
@@ -1026,79 +1022,14 @@ static void demo() {
     glBindFramebuffer(GL_FRAMEBUFFER,0);
     */
 
-    const i32 CHUNK_SIZE = 32;
-    const i32 MAP_SIZE = 8;
-    
-    SDL_Surface *perlin_surface = SDL_CreateRGBSurfaceWithFormat(0,CHUNK_SIZE*MAP_SIZE,CHUNK_SIZE*MAP_SIZE,32,SDL_PIXELFORMAT_ARGB8888);
 
     RandomState rand;
     random_engine_state = &rand;
     Random::Init();
 
-    /*
-    float perlin_map[MAP_SIZE*CHUNK_SIZE][MAP_SIZE*CHUNK_SIZE];
-    float normals[MAP_SIZE*CHUNK_SIZE+1][MAP_SIZE*CHUNK_SIZE+1];
-    memset(perlin_map,0,sizeof(perlin_map));
-    // accessing a normal at position x, y gives the normal located at the top left of the tile at that position
-    for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE+1;x++) {
-        for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE+1;y++) {
-            normals[x][y] = Random::Float(0.f,(float)PI*2.f);
-        }
-    }
-
-    for (i32 cx=0;cx<MAP_SIZE;cx++) {
-        for (i32 cy=0;cy<MAP_SIZE;cy++) {
-            // get normals of the chunk
-            v2 t1_norm = {cos(normals[cx][cy]),sin(normals[cx][cy])};
-            v2 t2_norm = {cos(normals[cx+1][cy]),sin(normals[cx+1][cy])};
-            v2 t3_norm = {cos(normals[cx][cy+1]),sin(normals[cx][cy+1])};
-            v2 t4_norm = {cos(normals[cx+1][cy+1]),sin(normals[cx+1][cy+1])};
-
-            //i32 curr_chunk_size=CHUNK_SIZE/2;
-            // loop through all pixels in chunk
-            for (i32 tx=0;tx<CHUNK_SIZE;tx++) {
-                for (i32 ty=0;ty<CHUNK_SIZE;ty++) {
-                    // normalized coordinate points within the chunk
-                    float nx = tx / (float)CHUNK_SIZE;
-                    float ny = ty / (float)CHUNK_SIZE;
-
-                    v2 t1_offset = {nx,ny};
-                    v2 t2_offset = {nx-1,ny};
-                    v2 t3_offset = {nx,ny-1};
-                    v2 t4_offset = {nx-1,ny-1};
-                    
-                    float scalar1 = (t1_offset.x * t1_norm.x) + (t1_offset.y * t1_norm.y);
-                    float scalar2 = (t2_offset.x * t2_norm.x) + (t2_offset.y * t2_norm.y);
-                    float scalar3 = (t3_offset.x * t3_norm.x) + (t3_offset.y * t3_norm.y);
-                    float scalar4 = (t4_offset.x * t4_norm.x) + (t4_offset.y * t4_norm.y);
-
-                    float u = perlin_fade(nx);
-                    float v = perlin_fade(ny);
-
-                    // lerp horizontally, then vertically
-                    // then lerp the two results
-                    float smooth1 = lerp(scalar1, scalar2, u);
-                    float smooth2 = lerp(scalar3, scalar4, u);
-                    float final_val = lerp(smooth1, smooth2, v);
-                    perlin_map[tx+cx*CHUNK_SIZE][ty+cy*CHUNK_SIZE] += final_val;
-                }
-            }
-        }
-    }
-    */
-    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,5,0.75);
-
-    /*
-    for (i32 x=0;x<MAP_SIZE*CHUNK_SIZE;x++) {
-        for (i32 y=0;y<MAP_SIZE*CHUNK_SIZE;y++) {
-            double noise = MAX(MIN(p_noise.noise(x,y),1),-1);
-            if (noise > 1 || noise < -1) std::cout << noise << std::endl;
-            u8 val = (u8)(((noise+1)/2)*255.f);
-            Color col = {val,val,val,255};
-            setpixel(perlin_surface,x,y,col);            
-        }
-    }
-    */
+    const i32 MAP_SIZE = 8;
+    const i32 CHUNK_SIZE = 16;
+    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,3,0.65);
 
     GLuint gl_perlin_tex=NULL;
     p_noise.generate_texture(&gl_perlin_tex);
@@ -1266,8 +1197,148 @@ static void demo() {
             glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
             glBindVertexArray(0);
         } else {
+            local_persist float zoom = 1.0f;
+            local_persist v2i map_pos={128,32};
+            
+            if (input.scrolled_up && zoom < 16.f) {
+                zoom *= 2;
+                // adjust position of tile based on where the mouse is located
+                // (don't just zoom into the top left everytime)
+                v2i dist_to_top_left = map_pos - mpos;
+                map_pos += dist_to_top_left;
+            } else if (input.scrolled_down && zoom > 0.125f) {
+                zoom /= 2;
+                v2i dist_to_top_left = map_pos - mpos;
+                map_pos += -dist_to_top_left/2;
+            }
+
+            if (input.mouse_middle_pressed) {
+                map_pos.x += input.mouse_move_x;
+                map_pos.y += input.mouse_move_y;
+            }
+
+            local_persist bool draw_tile_grid=false;
+            local_persist bool draw_chunk_grid=true;
+            local_persist bool raw_view=false;
+
+            if (input.just_pressed[SDL_SCANCODE_E]) {
+                raw_view = !raw_view;
+            }
+            if (input.just_pressed[SDL_SCANCODE_R]) {
+                draw_tile_grid = !draw_tile_grid;
+            }
+            if (input.just_pressed[SDL_SCANCODE_T]) {
+                draw_chunk_grid = !draw_chunk_grid;
+            }
+
+            zoom = clamp(0.125f,16.0f,zoom);
             glUseProgram(sh_textureProgram);
-            GL_DrawTexture(gl_perlin_tex,{128,32,256,256});
+            iRect dest = {map_pos.x,map_pos.y,(i32)(256*zoom),(i32)(256*zoom)};
+            i32 relative_tile_size = dest.w/(p_noise.chunk_size*p_noise.map_size);
+            i32 relative_chunk_size = relative_tile_size * p_noise.chunk_size;
+            i32 relative_map_size = relative_chunk_size * p_noise.map_size;
+
+            if (raw_view) {
+                GL_DrawTexture(gl_perlin_tex,dest);
+            } else {
+                i32 map_size_pixels_total = p_noise.map_size * p_noise.chunk_size * 16;
+                glm::mat4 larger_projection = glm::ortho(0.0f, static_cast<float>(map_size_pixels_total), static_cast<float>(map_size_pixels_total), 0.0f, -1.0f, 1.0f);
+                GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
+
+                local_persist GLuint gl_real_tex=NULL;
+                local_persist bool up_to_date=false;
+                glUseProgram(sh_textureProgram);
+                if(!up_to_date){
+                    if (gl_real_tex != NULL) {
+                        glDeleteTextures(1,&gl_real_tex);
+                    } if (gl_real_tex == NULL) {
+                        glGenTextures(1,&gl_real_tex);
+                    }
+                    GL_load_texture_for_framebuffer(gl_real_tex,map_size_pixels_total,map_size_pixels_total);
+                    GLuint gl_real_fb = GL_create_framebuffer(gl_real_tex);
+                    glBindFramebuffer(GL_FRAMEBUFFER,gl_real_fb);
+                    glClearColor(0.0f,1.0f,1.0f,1.0f);
+                    local_persist SDL_Surface *p_surf = p_noise.generate_surface();
+
+                    enum TILE_TYPE {
+                        DIRT,
+                        GRASS,
+                        WATER,
+                        STONE,
+                        SAND,
+                        TREE,
+                        COUNT
+                    };
+                    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(larger_projection));
+                    glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);
+
+                    glUseProgram(sh_textureProgram);
+                    for (i32 x=0;x<p_noise.map_size*p_noise.chunk_size;x++) {
+                        for (i32 y=0;y<p_noise.map_size*p_noise.chunk_size;y++) {
+                            double noise_val = MAX(MIN(p_noise.noise(x,y),1.0),-1.0);
+                            iRect src={0,0,16,16};
+                            TILE_TYPE tt;
+                            if (noise_val < -0.65) {
+                                tt = TILE_TYPE::WATER;
+                            } else if (noise_val < -0.58) {
+                                tt = TILE_TYPE::SAND;
+                            } else if (noise_val < -0.45) {
+                                tt = TILE_TYPE::DIRT;
+                            } else if (noise_val < -0.35) {
+                                tt = TILE_TYPE::STONE;
+                            } else if (noise_val < -0.1) {
+                                tt = TILE_TYPE::DIRT;
+                            } else if (noise_val < 0.5) {
+                                tt = TILE_TYPE::GRASS;
+                            } else if (noise_val < 0.55) {
+                                tt = TILE_TYPE::DIRT;
+                            } else {
+                                tt = TILE_TYPE::TREE;
+                            }
+
+                            if (tt == TILE_TYPE::WATER) {
+                                src = {32,0,16,16};
+                            } else if (tt == TILE_TYPE::DIRT) {
+                                src = {16,32,16,16};
+                            } else if (tt == TILE_TYPE::STONE) {
+                                src = {0,32,16,16};
+                            } else if (tt == TILE_TYPE::GRASS) {
+                                src = {0,16,16,16};
+                            } else if (tt == TILE_TYPE::SAND) {
+                                src = {16,16,16,16};
+                            } else if (tt == TILE_TYPE::TREE) {
+                                src = {0,48,16,16};
+                            }
+                            iRect tt_dest = {x*16,y*16,16,16};
+
+                            GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,src);
+                        }
+                    }
+                    glDeleteFramebuffers(1,&gl_real_fb);
+                    glBindFramebuffer(GL_FRAMEBUFFER,0);
+                    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+
+                    up_to_date=true;
+                }
+                glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+                GL_DrawTexture(gl_real_tex,dest);
+            }
+            if (draw_tile_grid) {
+                for (i32 x=0; x<p_noise.chunk_size*p_noise.map_size+1; x++) {
+                    GL_DrawLine({dest.x+x*relative_tile_size,dest.y},{dest.x+x*relative_tile_size,dest.y+dest.h});
+                }
+                for (i32 y=0; y<p_noise.chunk_size*p_noise.map_size+1; y++) {
+                    GL_DrawLine({dest.x,dest.y+y*relative_tile_size},{dest.x+dest.w,dest.y+y*relative_tile_size});
+                }
+            }
+            if (draw_chunk_grid) {
+                for (i32 x=0; x<p_noise.map_size+1; x++) {
+                    GL_DrawLine({dest.x+x*relative_chunk_size,dest.y},{dest.x+x*relative_chunk_size,dest.y+dest.h},COLOR_BLUE);
+                }
+                for (i32 y=0; y<p_noise.map_size+1; y++) {
+                    GL_DrawLine({dest.x,dest.y+y*relative_chunk_size},{dest.x+dest.w,dest.y+y*relative_chunk_size},COLOR_BLUE);
+                }
+            }
         }
         SDL_GL_SwapWindow(window);
     }

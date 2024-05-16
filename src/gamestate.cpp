@@ -186,9 +186,9 @@ void load_permanent_data_from_map(i32 map) {
 
 
     /*glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
-    glClearColor(1.f, 1.f, 0.f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glUseProgram(sh_textureProgram);
+      glClearColor(1.f, 1.f, 0.f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+      glUseProgram(sh_textureProgram);
     */
     for (i32 x=0; x<32; x++) {
         for (i32 y=0; y<32; y++) {

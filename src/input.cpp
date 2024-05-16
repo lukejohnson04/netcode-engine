@@ -8,6 +8,16 @@ struct InputState {
     bool mouse_just_released = false;
     bool mouse_pressed = false;
 
+    bool mouse_just_middle_pressed = false;
+    bool mouse_just_middle_released = false;
+    bool mouse_middle_pressed = false;
+
+    i32 mouse_move_x=0;
+    i32 mouse_move_y=0;
+
+    bool scrolled_up=false;
+    bool scrolled_down=false;
+
     bool text_input_captured=false;
     bool text_modified=false;
     bool text_submitted=false;
@@ -25,6 +35,15 @@ void PollEvents(InputState *state, bool *running) {
     state->text_modified=false;
     state->text_submitted=false;
 
+    state->scrolled_up=false;
+    state->scrolled_down=false;
+
+    state->mouse_just_middle_pressed = false;
+    state->mouse_just_middle_released = false;
+    
+    state->mouse_move_x=0;
+    state->mouse_move_y=0;
+
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_BACKSPACE && state->text_input_captured && state->input_field && state->input_field->size() > 0) {
@@ -40,13 +59,34 @@ void PollEvents(InputState *state, bool *running) {
         } else if (e.type == SDL_KEYUP) {
             state->just_released[e.key.keysym.scancode] = true;
             state->is_pressed[e.key.keysym.scancode] = false;
-        } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-            state->mouse_pressed = true;
-            state->mouse_just_pressed = true;
-        } else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
-            state->mouse_pressed = false;
-            state->mouse_just_released = true;
+        } else if (e.type == SDL_MOUSEBUTTONDOWN) {
+            if (e.button.button == SDL_BUTTON_LEFT) {
+                state->mouse_pressed = true;
+                state->mouse_just_pressed = true;
+            } else if (e.button.button == SDL_BUTTON_MIDDLE) {
+                state->mouse_middle_pressed = true;
+                state->mouse_just_middle_pressed = true;
+            }
+        } else if (e.type == SDL_MOUSEBUTTONUP) {
+            if (e.button.button == SDL_BUTTON_LEFT) {
+                state->mouse_pressed = false;
+                state->mouse_just_released = true;
+            } else if (e.button.button == SDL_BUTTON_MIDDLE) {
+                state->mouse_middle_pressed = false;
+                state->mouse_just_middle_released = true;
+            }
         // text input
+        } else if (e.type == SDL_MOUSEWHEEL) {
+            if (e.wheel.y > 0) {
+                state->scrolled_up=true;
+            } else {
+                state->scrolled_down=true;
+            }
+
+        } else if (e.type == SDL_MOUSEMOTION) {
+            state->mouse_move_x = e.motion.xrel;
+            state->mouse_move_y = e.motion.yrel;
+        
         } else if (e.type == SDL_TEXTINPUT && state->input_field) {
             //Not copy or pasting
             if( !( SDL_GetModState() & KMOD_CTRL && ( e.text.text[ 0 ] == 'c' || e.text.text[ 0 ] == 'C' || e.text.text[ 0 ] == 'v' || e.text.text[ 0 ] == 'V' ) ) )
