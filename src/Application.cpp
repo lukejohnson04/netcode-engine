@@ -1,5 +1,4 @@
 
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -324,9 +323,9 @@ static void GameGUIStart() {
                 // our last NON VERIFIED command
                 //gs = snapshots.back().gms;
                 std::sort(client_st.NetState.snapshots.begin(),client_st.NetState.snapshots.end(),[](auto&left,auto&right) {
-                    return left.gms.tick < right.gms.tick;//left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
+                    return ((game_state*)left.data)->tick < ((game_state*)right.data)->tick;//left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
                 });
-                gs = client_st.NetState.snapshots.back().gms;
+                gs = *(game_state*)client_st.NetState.snapshots.back().data;
                 /*
                 for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
                     if (snap->gms.tick <= target_tick-5) {
@@ -406,8 +405,8 @@ static void GameGUIStart() {
                 snapshot_t *next_snap=nullptr;
                 snapshot_t *exac_snap=nullptr;
                 
-                if (client_st.NetState.snapshots.back().gms.tick < interp_tick) {
-                    printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,client_st.NetState.snapshots.back().gms.tick);
+                if (((game_state*)(client_st.NetState.snapshots.back().data))->tick < interp_tick) {
+                    printf("Failed interp tick %d: most recent snapshot is %d\n",interp_tick,((game_state*)(client_st.NetState.snapshots.back().data))->tick);
                 }
                 // actually, this whole process of lerping is a little pointless when we have 60 snapshots a second
                 // cause we don't actually lerp at all unless there's packet loss... we just set it to one snapshot
@@ -416,14 +415,14 @@ static void GameGUIStart() {
                 // this whole process of finding interp snapshots only needs to be done once for all players btw
                 for (i32 ind=(i32)client_st.NetState.snapshots.size()-1;ind>=0;ind--){
                     snapshot_t *snap = &client_st.NetState.snapshots[ind];
-                
-                    if (snap->gms.tick == interp_tick) {
+                    game_state &gms = *(game_state*)snap->data;
+                    if (gms.tick == interp_tick) {
                         exac_snap = snap;
                         break;
-                    } else if (snap->gms.tick>interp_tick) {
+                    } else if (gms.tick>interp_tick) {
                         next_snap = snap;
                 
-                    } else if (snap->gms.tick<interp_tick) {
+                    } else if (gms.tick<interp_tick) {
                         prev_snap = snap;
                         break;
                     }
@@ -442,11 +441,14 @@ static void GameGUIStart() {
                         }
 
                         if (exac_snap) {
-                            chara->pos = exac_snap->gms.players[chara->id].pos;
+                            game_state &exac_gms = *(game_state*)exac_snap->data;
+                            chara->pos = exac_gms.players[chara->id].pos;
                         } else if (next_snap && prev_snap) {
-                            v2 prev_pos = prev_snap->gms.players[chara->id].pos;
-                            v2 next_pos = next_snap->gms.players[chara->id].pos;
-                            float f = (float)(interp_tick-prev_snap->gms.tick) / (float)(next_snap->gms.tick-prev_snap->gms.tick);
+                            game_state &prev_gms = *(game_state*)prev_snap->data;
+                            game_state &next_gms = *(game_state*)next_snap->data;
+                            v2 prev_pos = prev_gms.players[chara->id].pos;
+                            v2 next_pos = next_gms.players[chara->id].pos;
+                            float f = (float)(interp_tick-prev_gms.tick) / (float)(next_gms.tick-prev_gms.tick);
                             chara->pos = lerp(prev_pos,next_pos,f);
                         }
                     }
@@ -805,7 +807,7 @@ static void GameGUIStart() {
                     }
                     i32 count=0;
                     for (auto &snap:client_st.NetState.snapshots) {
-                        if (snap.gms.tick==ind) {
+                        if ((*(game_state*)snap.data).tick==ind) {
                             count++;
                         }
                     }
@@ -881,13 +883,6 @@ static void GameGUIStart() {
 
 endof_frame:
         SDL_GL_SwapWindow(window);
-        
-        //SDL_RenderPresent(sdl_renderer);
-        
-        // sleep until next tick
-
-        // when you don't sleep, it works fine?!?!
-        
     }
     
     SDL_DestroyRenderer(sdl_renderer);

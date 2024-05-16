@@ -310,7 +310,8 @@ static void server(int port) {
 
                     {
                         snapshot_t snap = {};
-                        snap.gms = gs;
+                        game_state &gms = *(game_state*)snap.data;
+                        gms = gs;
                         for (i32 ind=0;ind<(i32)gl_server.client_count;ind++) {
                             snap.last_processed_command_tick[ind] = gl_server.s_clients[ind].last_processed_command;
                         }
@@ -321,12 +322,13 @@ static void server(int port) {
                         // send each client a personalized snapshot that matches up to the last command received from them
                         packet_t p = {};
                         p.type = SNAPSHOT_TRANSIENT_DATA;
-
+                        game_state &gms = *(game_state*)p.data.snapshot.data;
+                        
                         i32 last_proc_command = gl_server.s_clients[client_id].last_processed_command;
                         // either update to the last EXACT update (i.e. where every client has processed all inputs)
                         // OR leave a little buffer
                         if (last_proc_command >= gs.tick) {
-                            p.data.snapshot.gms = gs;
+                            gms = gs;
                         } else {
                             i32 update_tick = last_proc_command;
                             if (update_tick<0) continue;
@@ -335,7 +337,7 @@ static void server(int port) {
                                 find_and_load_gamestate_snapshot(gs,gl_server.NetState,update_tick);
                             }
                             load_game_state_up_to_tick((void*)&gs,gl_server.NetState,update_tick,true);
-                            p.data.snapshot.gms = gs;
+                            gms = gs;
                         }
                         p.data.snapshot.last_processed_command_tick[client_id] = last_proc_command;
                         send_packet(gl_server.socket,&gl_server.clients[client_id],&p);
@@ -360,7 +362,8 @@ static void server(int port) {
                     // delete old snapshots
                     // OK but why are we loading snapshots from like, many seconds ago in the first place???
                     for (auto snap=gl_server.NetState.snapshots.begin();snap<gl_server.NetState.snapshots.end();) {
-                        if (snap->gms.tick < target_tick-240) {
+                        auto &snap_gms = *(game_state*)snap->data;
+                        if (snap_gms.tick < target_tick-240) {
                             snap = gl_server.NetState.snapshots.erase(snap);
                         } else {
                             snap++;

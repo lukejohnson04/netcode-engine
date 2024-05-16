@@ -83,8 +83,10 @@ struct game_state {
     }
 };
 
+// snapshots are for sending just the local data
 struct snapshot_t {
-    game_state gms;
+    char data[sizeof(game_state)];
+    //game_state gms;
     i32 last_processed_command_tick[16];
     i32 map;
 };
@@ -751,8 +753,9 @@ void render_pregame_screen(overall_game_manager &gms, double time_to_start) {
 // loads the first snapshot found before the input time
 internal void find_and_load_gamestate_snapshot(game_state &gst, netstate_info_t &c, int start_tick) {
     for (i32 ind=((i32)c.snapshots.size())-1; ind>=0;ind--) {
-        if (c.snapshots[ind].gms.tick<=start_tick) {
-            gst = c.snapshots[ind].gms;
+        game_state &gms = *(game_state*)c.snapshots[ind].data;
+        if (gms.tick<=start_tick) {
+            gst = gms;
             return;
         }
     }
@@ -768,8 +771,9 @@ internal void load_game_state_up_to_tick(void* temp_game_state_data, netstate_in
         // TODO: fix this
         if (overwrite_snapshots) {
             for (snapshot_t &snap: c.snapshots) {
-                if (snap.gms.tick==gst.tick) {
-                    snap.gms = gst;
+                game_state &gms = *(game_state*)snap.data;
+                if (gms.tick==gst.tick) {
+                    gms = gst;
                     break;
                 }
             }
