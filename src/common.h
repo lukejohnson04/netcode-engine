@@ -51,7 +51,6 @@ struct v2i {
 };
 
 
-
 struct v2 {
     float x,y;
     v2() {}
@@ -63,11 +62,21 @@ struct v2 {
         float len = sqrt((x * x) + (y * y));
         return v2(x / len, y / len);
     }
-
+    
     float get_length();
 
     v2 rotate(float rad);
+    static v2 Zero;
 };
+
+v2 v2::Zero = {0.f,0.f};
+
+struct v3 {
+    float x,y,z;
+    static v3 Zero;
+};
+
+v3 v3::Zero = {0.f,0.f,0.f};
 
 struct v2d {
     double x,y;
@@ -92,7 +101,6 @@ inline v2 operator*(v2 left, int right) {
 inline v2 operator/(v2 left, float right) {
     return {left.x/right,left.y/right};
 }
-
 
 
 inline v2 operator+(v2 left, v2 right) {
@@ -145,10 +153,32 @@ inline v2i &operator+=(v2i &left, v2i right) {
 }
 
 
+inline bool operator==(const v3 &left, const v3 &right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+
+inline v3 operator*(v3 left, float right) {
+    return {left.x*right,left.y*right,left.z*right};
+}
+
+
+inline v3 &operator*=(v3 &left, float right) {
+    left.x*=right;
+    left.y*=right;
+    left.z*=right;
+    return left;
+}
+
+
 
 struct iRect {
     int x,y,w,h;
 };
+
+iRect operator*(iRect &r, i32 mult) {
+    return {r.x*mult,r.y*mult,r.w*mult,r.h*mult};
+}
 
 
 struct fRect {
@@ -282,6 +312,11 @@ float fdistance_between_points(v2 p1,v2 p2) {
     return (float)sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
 }
 
+double ddistance_between_points(v2d p1,v2d p2) {
+    return sqrt(pow(p2.x-p1.x,2) + pow(p2.y - p1.y,2));
+}
+
+
 
 float v2::get_length() {
     return fdistance_between_points({0,0},*this);
@@ -333,54 +368,6 @@ inline intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_star
     return result;
 }
 
-/*
-
-  This function also works... i guess... not really.. lol
-intersect_props get_intersection(v2i ray_start, v2i ray_end, v2i seg_start, v2i seg_end) {
-    intersect_props res;
-    res.collides = false;
-
-    // RAY in parametric: Point + Delta*T1
-    double r_px = ray_start.x;
-    double r_py = ray_start.y;
-    double r_dx = ray_end.x-ray_start.x;
-    double r_dy = ray_end.y-ray_start.y;
-
-    // SEGMENT in parametric: Point + Delta*T2
-    double s_px = seg_start.x;
-    double s_py = seg_start.y;
-    double s_dx = seg_end.x-seg_start.x;
-    double s_dy = seg_end.y-seg_start.y;
-
-    // Are they parallel? If so, no intersect
-    double r_mag = sqrt(r_dx*r_dx+r_dy*r_dy);
-    double s_mag = sqrt(s_dx*s_dx+s_dy*s_dy);
-    if(r_dx/r_mag==s_dx/s_mag && r_dy/r_mag==s_dy/s_mag){
-        // Unit vectors are the same.
-        return res;
-    }
-
-    // SOLVE FOR T1 & T2
-    // r_px+r_dx*T1 = s_px+s_dx*T2 && r_py+r_dy*T1 = s_py+s_dy*T2
-    // ==> T1 = (s_px+s_dx*T2-r_px)/r_dx = (s_py+s_dy*T2-r_py)/r_dy
-    // ==> s_px*r_dy + s_dx*T2*r_dy - r_px*r_dy = s_py*r_dx + s_dy*T2*r_dx - r_py*r_dx
-    // ==> T2 = (r_dx*(s_py-r_py) + r_dy*(r_px-s_px))/(s_dx*r_dy - s_dy*r_dx)
-    double T2 = (r_dx*(s_py-r_py) + r_dy*(r_px-s_px))/(s_dx*r_dy - s_dy*r_dx);
-    double T1 = (s_px+s_dx*T2-r_px)/r_dx;
-
-    // Must be within parametic whatevers for RAY/SEGMENT
-    if(T1<0) return res;
-    if(T2<0 || T2>1) return res;
-
-    res.collides = true;
-    // Return the POINT OF INTERSECTION
-    res.collision_point.x = (float)(r_px+r_dx*T1);
-    res.collision_point.y = (float)(r_py+r_dy*T1);
-    return res;
-}
-*/
-
-
 struct segment {
     v2 p1,p2;
     bool operator ==(const segment&o) {
@@ -408,4 +395,44 @@ inline intersect_props get_collision(v2i from, v2 to, std::vector<segment> segme
 
     return res;
 }
+
+
+
+struct timer_t {
+    LARGE_INTEGER start_time,frequency;
+    LARGE_INTEGER temp_offset;
+
+    timer_t() {
+        if (!QueryPerformanceFrequency(&frequency)) {
+            std::cerr << "High-resolution performance counter not supported." << std::endl;
+            return;
+        }
+    }
+
+    void Start() {
+        QueryPerformanceCounter(&start_time);
+    }
+
+    inline LARGE_INTEGER get_high_res_elapsed() {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        end.QuadPart -= start_time.QuadPart;
+        return end;
+    }
+    
+    double get() {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        // Calculate the interval in seconds
+        return static_cast<double>(end.QuadPart - start_time.QuadPart) / frequency.QuadPart;
+    }
+
+    void add(double time) {
+        start_time.QuadPart += static_cast<LONGLONG>(time)*frequency.QuadPart;
+    }
+
+    void Restart() {
+        QueryPerformanceCounter(&start_time);
+    }
+};
 

@@ -1,18 +1,6 @@
 
 struct netstate_info_t;
 
-enum TILETYPE {
-    TT_NONE,
-    TT_GROUND,
-    TT_WALL,
-    TT_BOMBSITE,
-    TT_A,
-    TT_AA,
-    TT_ARROW_UPLEFT,
-    TT_ARROW_UPRIGHT,
-    TT_COUNT
-};
-
 enum ROUND_STATE {
     ROUND_WARMUP,
     ROUND_BUYTIME,
@@ -22,22 +10,44 @@ enum ROUND_STATE {
 };
 
 
-struct _strike_map_t {
+struct world_object_t {
+    v2 pos;
+    WORLD_OBJECT_TYPE type;
+
+    union {
+        i32 took_damage_tick;
+    };
+    i16 health=100;
+};
+
+
+struct world_chunk_t {
+    TILE_TYPE tiles[CHUNK_SIZE][CHUNK_SIZE] = {{TT_NONE}};
+    static constexpr i32 world_object_limit = (CHUNK_SIZE*CHUNK_SIZE)/2;
+
+    i32 world_object_count=0;
+    world_object_t world_objects[world_object_limit];
+
+    inline
+    void add_world_object(world_object_t n_object) {
+        assert(world_object_count<world_object_limit);
+        world_objects[world_object_count++] = n_object;
+    }
+};
+
+
+struct generic_map_t {
     i32 wall_count=0;
-    v2i walls[512];
+    v2i walls[WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE];
 
-    u8 tiles[MAX_MAP_SIZE][MAX_MAP_SIZE] = {{TT_NONE}};
-
-    i32 bombsite_count=0;
-    v2i bombsite[64];
-
-    i32 spawn_counts[TEAM_COUNT];
-    v2i spawns[TEAM_COUNT][32];
+    world_chunk_t chunks[WORLD_SIZE][WORLD_SIZE]={};
+    //TILE_TYPE tiles[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE] = {{TT_NONE}};
 
     void add_wall(v2i pos) {
         walls[wall_count++] = pos;
     }
 };
+
 
 // should be called world state instead of game state
 struct game_state {
@@ -46,41 +56,18 @@ struct game_state {
     i32 player_count=0;
     character players[8];
 
-    i32 bullet_count=0;
-    bullet_t bullets[64];
+    static constexpr i32 max_world_items_count=128;
+    i32 world_item_count=0;
+    world_item_t world_items[max_world_items_count];
 
     // should abstract these net variables out eventually
-    i32 score[8] = {0};
     int tick=0;
-
-    i32 bomb_planted_tick=0;
-    entity_id bomb_planter = ID_DONT_EXIST;
-    v2i bomb_plant_location={0,0};
-
-    i32 bomb_defused_tick=0;
-    entity_id bomb_defuser = ID_DONT_EXIST;
-
-    bool bomb_defused=false;
-    bool bomb_planted=false;
-
     i32 round_start_tick=0;
-    i32 round_end_tick=0;
-    i32 buytime_end_tick=0;
-    i32 one_remaining_tick=0;
-    ROUND_STATE round_state = ROUND_WARMUP;
 
     // let the player get into negative money
     // and give them a prompt that if they don't make their money back
     // the feds will come after them
-    i32 money[MAX_PLAYERS]={0};
-
     void update(netstate_info_t &c, double delta);
-    void add_bullet(v2 pos, float rot, entity_id shooter_id) {
-        bullet_t &bullet = bullets[bullet_count++];
-        bullet.position = pos;
-        bullet.vel = convert_angle_to_vec(rot)*600.f;
-        bullet.shooter_id = shooter_id;
-    }
 };
 
 // snapshots are for sending just the local data
@@ -143,168 +130,56 @@ struct netstate_info_t {
 global_variable void* transient_game_state;
 global_variable void* permanent_game_state;
 
-
 global_variable game_state gs;
-global_variable _strike_map_t _mp;
+global_variable generic_map_t _mp;
 
-
-static void add_player(character* players, i32 *player_count) {
-    entity_id id = (entity_id)((*player_count)++);
-    players[id] = create_player({0,0},id);
-}
-
-
-static void add_bullet(bullet_t *bullets, i32 *bullet_count, v2 pos, float rot, entity_id shooter_id) {
-    bullet_t &bullet = bullets[(*bullet_count)++];
-    bullet.position = pos;
-    bullet.vel = convert_angle_to_vec(rot)*600.f;
-    bullet.shooter_id = shooter_id;
-}
-
-static void add_bullet(v2 pos, float rot, entity_id shooter_id) {
-    bullet_t &bullet = gs.bullets[gs.bullet_count++];
-    bullet.position = pos;
-    bullet.vel = convert_angle_to_vec(rot)*600.f;
-    bullet.shooter_id = shooter_id;
-}
-
-enum {
-    MAP_DE_DUST2,
-    MAP_COUNT
-};
-
-void load_permanent_data_from_map(i32 map) {
-    SDL_Surface *level_surface = IMG_Load("res/map.png");
-
+void load_new_game() {
+    timer_t perfCounter;
+    perfCounter.Start();
+    
+    gs = {};
     _mp = {};
+
+    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
+    constexpr i32 tiles_in_world = WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE;
+
+    double white_noise[tiles_in_world];
+    generate_white_noise(white_noise,tiles_in_world,Random::seed);
+    double height_noise[tiles_in_world];
+    generate_height_noisemap(height_noise,white_noise,WORLD_SIZE*CHUNK_SIZE,Random::seed);
     
-    i32 &ct_spawn_count=_mp.spawn_counts[COUNTER_TERRORIST];
-    v2i *ct_spawns=_mp.spawns[COUNTER_TERRORIST];
-    i32 &t_spawn_count=_mp.spawn_counts[TERRORIST];
-    v2i *t_spawns = _mp.spawns[TERRORIST];
+    for (i32 cy=0;cy<WORLD_SIZE;cy++) {
+        for (i32 cx=0;cx<WORLD_SIZE;cx++) {
+            world_chunk_t chunk = {};
 
-    ct_spawn_count=0;
-    t_spawn_count=0;
-
-
-    /*glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
-      glClearColor(1.f, 1.f, 0.f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
-      glUseProgram(sh_textureProgram);
-    */
-    for (i32 x=0; x<32; x++) {
-        for (i32 y=0; y<32; y++) {
-            Color col = {0,0,0,0};
-            Uint32 data = getpixel(level_surface, x,y);
-            SDL_GetRGBA(data, level_surface->format, &col.r, &col.g, &col.b, &col.a);
-            if (col == Color(0,0,0,255)) {
-                _mp.add_wall({x,y});
-                _mp.tiles[x][y] = TT_WALL;
-            } else if (col == Color(255,0,0,255)) {
-                t_spawns[t_spawn_count++] = {x,y};
-            } else if (col == Color(255,255,0,255)) {
-                ct_spawns[ct_spawn_count++] = {x,y};
-            } else if (col == Color(0,0,255,255)) {
-                _mp.bombsite[_mp.bombsite_count++] = {x,y};
-                _mp.tiles[x][y] = TT_BOMBSITE;
-            } else if (col.a == 0) {
-                _mp.tiles[x][y] = TT_GROUND;
-            } else if (col == Color(241,0,255)) {
-                _mp.tiles[x][y] = TT_AA;
-            } else if (col == Color(0,255,0)) {
-                _mp.tiles[x][y] = TT_A;
-            } else if (col == Color(248,130,255)) {
-                _mp.tiles[x][y] = TT_ARROW_UPLEFT;
-            } else if (col == Color(120,255,120)) {
-                _mp.tiles[x][y] = TT_ARROW_UPRIGHT;
-            } else {
-                _mp.tiles[x][y] = TT_GROUND;
+            for (i32 y=0;y<CHUNK_SIZE;y++) {
+                for (i32 x=0;x<CHUNK_SIZE;x++) {
+                    i32 global_x = cx*CHUNK_SIZE+x;
+                    i32 global_y = cy*CHUNK_SIZE+y;
+                    
+                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,white_noise,height_noise);
+                    chunk.tiles[x][y] = tt;
+                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,white_noise,height_noise);
+                    if (wo_tt != WO_NONE) {
+                        world_object_t n_obj = {};
+                        n_obj.type = wo_tt;
+                        n_obj.took_damage_tick=0;
+                        n_obj.pos = {(float)global_x*64.f,(float)global_y*64.f};
+                        chunk.add_world_object(n_obj);
+                    }
+                }
             }
+            _mp.chunks[cx][cy] = chunk;
         }
     }
-    SDL_FreeSurface(level_surface);
-}
 
-void gamestate_load_map(overall_game_manager &gms, i32 map) {
-    gms.state = GAME_PLAYING;
+    character &player = gs.players[gs.player_count];
+    player = create_player({200,200},(entity_id)(gs.player_count));
+    player.color = {(u8)(rand() % 255), (u8)(rand() % 255), (u8)(rand() % 255), 255};
+    gs.player_count++;
 
-    gs.bullet_count=0;
-    gs.one_remaining_tick=0;
-    gs.bomb_planted_tick=0;
-    gs.bomb_defused_tick=0;
-    gs.bomb_planted=false;
-    gs.bomb_defused=false;
-    gs.round_state = ROUND_BUYTIME;
-
-    load_permanent_data_from_map(map);
-    
-    bool create_all_charas = gs.player_count == gms.connected_players ? false : true;
-    gs.player_count=0;
-
-    i32 side_count[TEAM_COUNT]={0};    
-    i32 unused_count[TEAM_COUNT]={_mp.spawn_counts[TERRORIST],_mp.spawn_counts[COUNTER_TERRORIST]};
-    v2i unused_spawns[TEAM_COUNT][32];
-    memcpy(unused_spawns[TERRORIST],_mp.spawns[TERRORIST],32*sizeof(v2i));
-    memcpy(unused_spawns[COUNTER_TERRORIST],_mp.spawns[COUNTER_TERRORIST],32*sizeof(v2i));
-
-    for (i32 ind=0; ind<gms.connected_players; ind++) {
-        gs.money[ind] = FIRST_ROUND_START_MONEY;
-        if (create_all_charas == false) {
-            character old_chara = gs.players[ind];
-            
-            add_player(gs.players,&gs.player_count);
-            gs.players[ind] = create_player({0,0},old_chara.id);
-            gs.players[ind].color = old_chara.color;
-        } else {
-            add_player(gs.players,&gs.player_count);
-        
-            int total_color_points=rand() % 255 + (255+200);
-            gs.players[gs.player_count-1].color.r = (u8)(rand()%MIN(255,total_color_points));
-            total_color_points-=gs.players[gs.player_count-1].color.r;
-            gs.players[gs.player_count-1].color.g = (u8)(rand()%MIN(255,total_color_points));
-            total_color_points-=gs.players[gs.player_count-1].color.g;
-            gs.players[gs.player_count-1].color.b = (u8)total_color_points;
-        }
-
-        TEAM n_team;
-        if (side_count[TERRORIST] == side_count[COUNTER_TERRORIST]) {
-            n_team = (TEAM)(rand() % (i32)TEAM_COUNT);
-        } else if (side_count[TERRORIST] < side_count[COUNTER_TERRORIST]) {
-            n_team = TERRORIST;
-        } else {
-            n_team = COUNTER_TERRORIST;
-        }
-
-        i32 rand_spawn = rand() % unused_count[n_team];
-        gs.players[ind].pos = unused_spawns[n_team][rand_spawn]*64;
-        unused_spawns[n_team][rand_spawn] = unused_spawns[n_team][rand_spawn-1];
-        unused_count[n_team]--;
-        side_count[n_team]++;
-        gs.players[ind].team = n_team;
-    }
-
-    // start in 5 seconds
-    gs.round_start_tick = gs.tick + 1;
-    gs.buytime_end_tick = gs.round_start_tick + (BUYTIME_LENGTH * 60);
-}
-
-internal void on_bomb_plant_finished(entity_id id, i32 tick) {
-    gs.bomb_planted_tick = tick;
-    gs.bomb_planter = id;
-    gs.bomb_plant_location = gs.players[id].pos + v2(32,40);
-    gs.bomb_planted=true;
-}
-
-internal void on_bomb_defuse_finished(entity_id id, i32 tick) {
-    gs.bomb_defused_tick = tick;
-    gs.bomb_defuser = id;
-    gs.bomb_defused=true;
-    gs.bomb_planted=false;
-}
-
-void game_state_end_round() {
-    gs.round_state = ROUND_ENDTIME;
-    gs.round_end_tick = gs.tick;
+    double elapsed = perfCounter.get();
+    std::cout << "World generation took " << elapsed << " seconds" << std::endl;
 }
 
 
@@ -312,38 +187,8 @@ void game_state_end_round() {
 void game_state::update(netstate_info_t &c, double delta) {
     if (tick < round_start_tick) {
         return;
-    } if (round_state == ROUND_BUYTIME) {
-        if (tick >= buytime_end_tick) {
-            round_state = ROUND_PLAYING;
-        }
     }
-    if (c.authoritative && round_state == ROUND_ENDTIME) {
-        if (tick >= round_end_tick + ROUND_ENDTIME_LENGTH*60) {
-            gamestate_load_map(c.gms,MAP_DE_DUST2);
-        }
-    }
-
-    if (bomb_planted && tick == bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
-        // explode bomb
-        bomb_planted=false;
-        game_state_end_round();
-        
-        FORn(players,player_count,player) {
-            double dist_to_bomb = distance_between_points(player->pos,bomb_plant_location);
-            if (dist_to_bomb < BOMB_RADIUS) {
-                if (dist_to_bomb < BOMB_KILL_RADIUS) {
-                    player->health = 0;
-                } else {
-                    int damage = (int)((dist_to_bomb-BOMB_KILL_RADIUS) / (BOMB_RADIUS-BOMB_KILL_RADIUS) * 100.0);
-                    player->health -= damage;
-                }
-            }
-        }
-        if (!c.authoritative) {
-            queue_sound(SfxType::BOMB_DETONATE_SFX,bomb_planter,tick);
-        }
-    }
-
+    
     // add commands as the server
     if (c.authoritative) {        
         FORn(players,player_count,player) {
@@ -358,80 +203,79 @@ void game_state::update(netstate_info_t &c, double delta) {
     // process commands for this tick
     for (command_node &node: c.command_stack) {
         if (node.cmd.tick == tick) {
-            if (round_state == ROUND_BUYTIME) {
-                if (node.cmd.code != CMD_BUY) continue;
-            }
             process_command(&players[node.cmd.sending_id],node.cmd);
         }
     }
 
-    i32 planted_before_tick = bomb_planted;
-    i32 defused_before_tick = bomb_defused;
     // interp delay in ticks
+    i32 punching_players_count=0;
+    character *punching_players[8]={nullptr};
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
         bool planting_before_update = obj->curr_state == character::PLANTING;
-        update_player(obj,delta,_mp.wall_count,_mp.walls,player_count,players,_mp.bombsite_count,_mp.bombsite,tick,planted_before_tick,bomb_plant_location);
+        update_player(obj,delta,_mp.wall_count,_mp.walls,player_count,players,tick);
+        if (obj->curr_state == character::PUNCHING && obj->has_hit_something_yet==false) {
+            punching_players[punching_players_count++] = obj;
+        }
     }
 
-    FOR(bullets,bullet_count) {
-        obj->position += obj->vel*delta;
-        // if a bullet hits a wall delete it
-        FORn(_mp.walls,_mp.wall_count,wall) {
-            fRect b_hitbox = {obj->position.x,obj->position.y,16.f,16.f};
-            fRect wall_rect = {wall->x*64.f,wall->y*64.f,64.f,64.f};
-            if (rects_collide(b_hitbox,wall_rect)) {
-                *obj = bullets[--bullet_count];
-                break;
-            }
-        }
-        FORn(players,player_count,player) {
-            if (player->id==obj->shooter_id) continue;
-            fRect b_hitbox = {obj->position.x,obj->position.y,16.f,16.f};
-            fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+    for (i32 cx=0;cx<WORLD_SIZE;cx++) {
+        for (i32 cy=0;cy<WORLD_SIZE;cy++) {
+            world_chunk_t *chunk = &_mp.chunks[cx][cy];
+            for (i32 obj_ind=0;obj_ind<chunk->world_object_count;obj_ind++) {
+                world_object_t *wo_tt = &chunk->world_objects[obj_ind];
+                if (wo_tt->type != WO_TREE) continue;
+                if (tick - wo_tt->took_damage_tick < 6) continue;
+                iRect tree_rect = {(i32)wo_tt->pos.x,(i32)wo_tt->pos.y,64,64};
+                for (i32 p_ind=0;p_ind<punching_players_count;p_ind++) {
+                    character *player = punching_players[p_ind];
+                    iRect p_rect = {(i32)player->pos.x,(i32)player->pos.y,64,64};
 
-            if (rects_collide(b_hitbox,p_hitbox)) {
-                *obj = bullets[--bullet_count];
-                if (player->curr_state != character::SHIELD) {
-                    player_take_damage(player,20);
+                    if (rects_collide(p_rect,tree_rect)) {
+                        player->has_hit_something_yet=true;
+                        wo_tt->took_damage_tick = tick;
+                        wo_tt->health -= 15;
+                        // tree destroyed
+                        if (wo_tt->health <= 0) {
+                            world_items[world_item_count++] = create_world_item(ITEM_TYPE::IT_WOOD,wo_tt->pos,player->flip?-1.0f:1.0f);
+                            chunk->world_objects[obj_ind] = chunk->world_objects[--chunk->world_object_count];
+                            obj_ind--;
+                        }
+                        punching_players[p_ind] = punching_players[--punching_players_count];
+                        break;
+                    }
                 }
-                break;
             }
         }
-        if (obj->position.x > 2000 || obj->position.x < -2000 || obj->position.y > 2000 || obj->position.y < -2000) {
-            *obj = bullets[--bullet_count];
-            obj--;
-            continue;
-        }
     }
+    for (i32 item_ind=0;item_ind<world_item_count;item_ind++) {
+        world_item_t *item = &world_items[item_ind];
+        iRect item_pickup_rect = {(i32)item->pos.x,(i32)item->pos.y,32,32};
+        bool picked_up=false;
+        for (i32 p_ind=0;p_ind<player_count;p_ind++) {
+            character *player=&players[p_ind];
+            iRect p_pickup_rect = {(i32)player->pos.x+8,(i32)player->pos.y+24,64-(8*2),64-(24)};
+            
+            if (rects_collide(p_pickup_rect,item_pickup_rect)) {
+                if (add_to_inventory(player->inventory,character::INVENTORY_SIZE,{item->type,item->count})) {
+                    world_items[item_ind--] = world_items[--world_item_count];
+                    picked_up=true;
+                    break;
+                }
+            }
+        } if (picked_up) continue;
+        
+        if (item->vel == v3::Zero) continue;
+        item->pos += {item->vel.x,item->vel.y};
+        item->z_pos += item->vel.z;
 
-    // if we want to make bomb plant/explosion completely authoritative we just put the code in this
-    // c.authoritative check
-    if (bomb_planted) {
-        if (!planted_before_tick) {
-            if (c.authoritative) {
-                queue_sound(SfxType::PLANT_FINISHED_SFX,bomb_planter,tick);
-            }
-        }
-    } if (bomb_defused) {
-        if (!defused_before_tick) {
-            if (c.authoritative) {
-                queue_sound(SfxType::BOMB_DEFUSE_FINISH_SFX,ID_SERVER,tick);
-                game_state_end_round();
-            }
-        }
-    }
-    
-    if (c.authoritative && round_state != ROUND_ENDTIME) {
-        // check how many players are alive
-        i32 living[TEAM_COUNT]={0};
-        FORn(players,player_count,player) {
-            if (player->curr_state != character::DEAD) {
-                living[player->team]++;
-            }
-        }
-        if ((!bomb_planted && living[TERRORIST]==0) || living[COUNTER_TERRORIST]==0) {
-            game_state_end_round();
+        item->vel.x *= 0.85f;
+        item->vel.y *= 0.85f;
+        item->vel.z += 120.f*(1.0f/60.0f);
+        
+        if (item->z_pos >= 0) {
+            item->z_pos = 0;
+            item->vel = {0,0,0};
         }
     }
 }
@@ -457,50 +301,100 @@ struct {
     std::vector<segment> segments;
 } client_sided_render_geometry;
 
-bool draw_shadows=true;
+bool draw_shadows=false;
 
 void render_game_state(character *render_from_perspective_of=nullptr, camera_t *game_camera=nullptr) {
     // Render start
     glClearColor(1.f, 0.0f, 0.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-
     v2i cam_mod = {0,0};
     if (game_camera) cam_mod = v2i(1280/2,720/2) - v2i(game_camera->pos);
-    iRect map_rect = {cam_mod.x,cam_mod.y,MAX_MAP_SIZE*64,MAX_MAP_SIZE*64};
+    iRect map_rect = {cam_mod.x,cam_mod.y,WORLD_SIZE*CHUNK_SIZE*64,WORLD_SIZE*CHUNK_SIZE*64};
     iRect cam_rect = {(i32)game_camera->pos.x - (1280/2),(i32)game_camera->pos.y - (720/2),1280,720};
 
     glUseProgram(sh_textureProgram);
     glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
     glClearColor(1.f, 1.f, 0.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    for (i32 x=0; x<MAX_MAP_SIZE; x++) {
-        for (i32 y=0; y<MAX_MAP_SIZE; y++) {
-            i32 type = _mp.tiles[x][y];
-            iRect dest = {x*64,y*64,64,64};
-            if (rects_collide(dest,cam_rect) == false) continue;
-            dest.x += cam_mod.x;
-            dest.y += cam_mod.y;
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_MINIMAP]);
+    glClearColor(1.f, 1.f, 0.f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
+    for (i32 cy=0; cy<WORLD_SIZE; cy++) {
+        for (i32 cx=0; cx<WORLD_SIZE; cx++) {
+            // see if chunk is onscreen
+            const i32 chunk_size_pixels = CHUNK_SIZE*64;
+            world_chunk_t chunk = _mp.chunks[cx][cy];
+            iRect chunk_rect = {chunk_size_pixels*cx,chunk_size_pixels*cy,chunk_size_pixels,chunk_size_pixels};
+            if (rects_collide(chunk_rect,cam_rect) == false) continue;
+
+            for (i32 y=0;y<CHUNK_SIZE;y++) {
+                for (i32 x=0;x<CHUNK_SIZE;x++) {
+                    TILE_TYPE type = chunk.tiles[x][y];
+                    iRect dest = {x*64+chunk_rect.x,y*64+chunk_rect.y,64,64};
+                    if (rects_collide(dest,cam_rect)==false) continue;
             
-            iRect src={0,0,16,16};
-            if (type == TT_GROUND) {
-                src={16,16,16,16};
-            } else if (type == TT_WALL) {
-                src={16,0,16,16};
-            } else if (type == TT_BOMBSITE) {
-                src={32,0,16,16};
-            } else if (type == TT_A) {
-                src={32,16,16,16};
-            } else if (type == TT_AA) {
-                src={32,32,16,16};
-            } else if (type == TT_ARROW_UPLEFT) {
-                src={48,16,16,16};
-            } else if (type == TT_ARROW_UPRIGHT) {
-                src={48,32,16,16};
+                    iRect src={0,0,16,16};
+                    if (type == TILE_TYPE::TT_DIRT) {
+                        src = {16,32,16,16};
+                    } else if (type == TILE_TYPE::TT_GRASS) {
+                        src = {0,16,16,16};
+                    } else if (type == TILE_TYPE::TT_WATER) {
+                        src = {32,0,16,16};
+                    } else if (type == TILE_TYPE::TT_STONE) {
+                        src = {0,32,16,16};
+                    } else if (type == TILE_TYPE::TT_SAND) {
+                        src = {16,16,16,16};
+                    }
+            
+                    dest.x += cam_mod.x;
+                    dest.y += cam_mod.y;
+                
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],dest,src);
+                }
             }
-            GL_DrawTexture(gl_textures[TILE_TEXTURE],dest,src);
         }
     }
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
+
+    // this drawing is broken because it only draws inorder within chunks
+    // e.g. it goes left to right, top to bottom. But then next it draws
+    // the neighbor chunk, which starts back at the top right
+    for (i32 cy=0; cy<WORLD_SIZE; cy++) {
+        for (i32 cx=0; cx<WORLD_SIZE; cx++) {
+            // see if chunk is onscreen
+            const i32 chunk_size_pixels = CHUNK_SIZE*64;
+            world_chunk_t chunk = _mp.chunks[cx][cy];
+            iRect chunk_rect = {chunk_size_pixels*cx,chunk_size_pixels*cy,chunk_size_pixels,chunk_size_pixels};
+
+            // need to make the chunk size a little bigger because trees are massive and take up more
+            // screenspace than just the tiles of the chunk themselves
+            if (rects_collide(iRect({chunk_rect.x-192,chunk_rect.y-192,chunk_rect.w+384,chunk_rect.h+384}),cam_rect) == false) continue;
+
+            for (i32 obj_ind=0;obj_ind<chunk.world_object_count;obj_ind++) {
+                world_object_t *tree = &chunk.world_objects[obj_ind];
+                if (tree->type != WORLD_OBJECT_TYPE::WO_TREE) {
+                    continue;
+                }
+                bool mod=false;
+                if (gs.tick - tree->took_damage_tick < 12) {
+                    mod = true;
+                    glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,0.5f,0.75f,1.0f);
+                }
+                iRect tree_dest = {(i32)tree->pos.x-64,(i32)tree->pos.y-(64*3),3*64,4*64};
+                tree_dest.x += cam_mod.x;
+                tree_dest.y += cam_mod.y;
+                GL_DrawTexture(gl_textures[TILE_TEXTURE],tree_dest,{0,64,48,64});
+                if (mod) {
+                    glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,1.0f,1.0f,1.0f);
+                }
+            }
+        }
+    }
+    
+    
     glBindFramebuffer(GL_FRAMEBUFFER,0);
     
     // lol is this objectively horrible?? its a massive texture so its a great idea but poor execution
@@ -523,26 +417,23 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
             u8 g = (u8)lerp(p.color.g-75.f,(float)p.color.g,(0.5f-(float)p.damage_timer)*(1.f/0.5f));
             u8 b = (u8)lerp(p.color.b-105.f,(float)p.color.b,(0.5f-(float)p.damage_timer)*(1.f/0.5f));
             glUniform4f(tintLoc_col, p.color.r,g,b,1.0f);
+            std::cout << "damage timer\n";
         } else {
-            glUniform4f(tintLoc_col, p.color.r,p.color.g,p.color.b,1.0f);
+            glUniform4f(tintLoc_col, p.color.r/255.f,p.color.g/255.f,p.color.b/255.f,1.0f);
         }
         GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE],dest_rect,src_rect,p.flip);
     }
+
+    for (i32 item_ind=0; item_ind<gs.world_item_count; item_ind++) {
+        world_item_t *item = &gs.world_items[item_ind];
+        iRect rect = {(i32)item->pos.x,(i32)item->pos.y,32,32};
+        if (rects_collide(rect,cam_rect)==false) continue;
+        rect.x+=cam_mod.x;
+        rect.y+=cam_mod.y;
+        rect.y += (i32)item->z_pos;
+        GL_DrawTexture(gl_textures[ITEM_TEXTURE],rect,{32,0,16,16});
+    }
     glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
-
-    for (i32 ind=0; ind<gs.bullet_count; ind++) {
-        iRect rect = {(int)gs.bullets[ind].position.x+cam_mod.x,(int)gs.bullets[ind].position.y+cam_mod.y,16,16};
-        iRect center = {8,8};
-        float rad_rot = convert_vec_to_angle(gs.bullets[ind].vel)+(float)PI;
-
-        GL_DrawTextureEx(gl_textures[BULLET_TEXTURE],rect,{0,0,0,0},false,false,rad_rot);
-    }
-
-    // if the bomb has been planted draw the bomb
-    if (gs.bomb_planted) {
-        iRect dest = {(int)gs.bomb_plant_location.x-12+cam_mod.x,(int)gs.bomb_plant_location.y-12+cam_mod.y,24,24};
-        GL_DrawTexture(gl_textures[ITEM_TEXTURE],dest,{16,16,16,16});
-    }
     
     if (render_from_perspective_of != nullptr && client_sided_render_geometry.raycast_points.size()>0 && draw_shadows) {
         const SDL_Color black = {0,0,0,255};
@@ -693,28 +584,12 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         GL_DrawTextureEx(gl_textures[TX_GAME_OBJECTS],{0,0,0,0},{0,0,0,0},false,true);
     }
 
+    // minimap
     glUseProgram(sh_textureProgram);
-    // gui elements
-    if (gs.round_state == ROUND_BUYTIME) {
-        double time_until_start = (gs.buytime_end_tick-gs.tick) * (1.0/60.0);
-        std::string timer_str=std::to_string((int)ceil(time_until_start));;
-        local_persist generic_drawable round_start_timer={};
-        round_start_timer = generate_text(m5x7,timer_str,{255,0,0,255},round_start_timer.gl_texture);
-        round_start_timer.scale = {2,2};
-        round_start_timer.position = {1280/2-round_start_timer.get_draw_irect().w/2,24};
-        GL_DrawTexture(round_start_timer.gl_texture,round_start_timer.get_draw_irect());
-        std::cout << timer_str << std::endl;
-
-    } else if (gs.round_state == ROUND_PLAYING && gs.bomb_planted) {
-        double time_until_detonation = (gs.bomb_planted_tick+(BOMB_TIME_TO_DETONATE*60) - gs.tick) * (1.0/60.0);
-        std::string timer_str=std::to_string((int)ceil(time_until_detonation));
-        local_persist generic_drawable detonation_timer={};
-        detonation_timer = generate_text(m5x7,timer_str,{255,0,0,255},detonation_timer.gl_texture);
-        detonation_timer.scale = {2,2};
-        detonation_timer.position = {1280/2-detonation_timer.get_draw_irect().w/2,24};
-        GL_DrawTexture(detonation_timer.gl_texture,detonation_timer.get_draw_irect());
-    }
-
+    iRect minimap_dest = {1280-8-128,8,128,128};
+    // border
+    GL_DrawTexture(gl_textures[MINIMAP_TEXTURE],{minimap_dest.x-8,minimap_dest.y-8,minimap_dest.w+16,minimap_dest.h+16});
+    //GL_DrawTextureEx(gl_textures[TX_MINIMAP],minimap_dest,{0,0,0,0},false,true);
 }
 
 void render_pregame_screen(overall_game_manager &gms, double time_to_start) {

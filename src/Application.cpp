@@ -20,6 +20,7 @@
 
 #include <unordered_map>
 #include <vector>
+#include <queue>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -52,6 +53,8 @@
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
 
+
+
 SDL_Window *window = nullptr;
 SDL_Surface *screenSurface = nullptr;
 SDL_Renderer *sdl_renderer=nullptr;
@@ -59,6 +62,10 @@ SDL_GLContext glContext;
 glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(WINDOW_WIDTH), static_cast<float>(WINDOW_HEIGHT), 0.0f, -1.0f, 1.0f);
 
 void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true) {
+#ifdef PROFILE_BUILD
+    timer_t perfCounter;
+    perfCounter.Start();
+#endif
     if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_VIDEO_OPENGL) < 0) {
         printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
         return;
@@ -82,8 +89,13 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);  // Use OpenGL 3.x
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);  // Version 3.3, for example
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);    
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
+#ifdef PROFILE_BUILD
+    double time_to_generic_setup_finish = perfCounter.get();
+    std::cout << "Took " << time_to_generic_setup_finish << " seconds to init up to window creation begin" << std::endl;    
+#endif
+    
     window = SDL_CreateWindow(winstr,
                               SDL_WINDOWPOS_UNDEFINED,
                               SDL_WINDOWPOS_UNDEFINED,
@@ -96,6 +108,11 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
     if (window == nullptr) {
         printf("Window could not be created. SDL Error: %s\n", SDL_GetError());
     }
+    
+#ifdef PROFILE_BUILD
+    double time_to_window_creation = perfCounter.get();
+    std::cout << "Took " << time_to_window_creation << " seconds to init up to window creation finished" << std::endl;    
+#endif
 
     glContext = SDL_GL_CreateContext(window);
 
@@ -104,6 +121,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
         SDL_DestroyWindow(window);
         SDL_Quit();
     }
+    
 
     SDL_GL_MakeCurrent(window, glContext);
     
@@ -121,6 +139,9 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#ifdef PROFILE_BUILD
+    std::cout << "Took " << perfCounter.get() << " seconds to setup glew and OpenGL after window creation" << std::endl;    
+#endif
 
     GLenum err = glGetError();
     
@@ -141,7 +162,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
     screenSurface = SDL_GetWindowSurface(window);
 }
 
-#define MAX_MAP_SIZE 32
+//#define MAX_MAP_SIZE 64
 
 
 #include "render.cpp"
@@ -150,6 +171,8 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #include "input.cpp"
 #include "random.cpp"
 #include "perlin.cpp"
+#include "world_gen.cpp"
+#include "item.cpp"
 
 #ifdef RELEASE_BUILD
 #define BUYTIME_LENGTH 10
@@ -179,7 +202,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #define MAX_CLIENTS 16
 
 #include "gamestate.cpp"
-#include "gm_strike.cpp"
+//#include "gm_strike.cpp"
 #include "network.cpp"
 #include "server.cpp"
 #include "client.cpp"
@@ -253,22 +276,30 @@ static void GameGUIStart() {
 
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
+    printf("character size: %d\n",(i32)sizeof(character));
 
-    gm_strike gamestate = {};
-    strike_map_t map={};
-    transient_game_state = (void*)&gamestate;
-    permanent_game_state = (void*)&map;
-    
     while (running) {
         // input
         PollEvents(&input,&running);
+
+        i32 curr_state;
+
         character *player=nullptr;
-        //gm_strike &gs = *(gm_strike*)transient_game_state;
+
+        WaitForSingleObject(client_st._mt_packet_queue,INFINITE);
+        while (client_st.packet_queue.empty() == false) {
+            packet_t pc = client_st.packet_queue.front();
+            client_st.packet_queue.pop();
+            process_packet(pc);
+        }
+        ReleaseMutex(client_st._mt_packet_queue);
+        
+        curr_state = client_st.gms.state;
         if (gs.players[client_st.client_id].id != ID_DONT_EXIST) {
             player = &gs.players[client_st.client_id];
         }
 
-        if (client_st.gms.state == GMS::GAME_PLAYING) {
+        if (curr_state == GMS::GAME_PLAYING) {
             if (input.just_pressed[SDL_SCANCODE_LEFTBRACKET]) {
                 client_st.NetState.interp_delay--;
                 // TODO: pull interp delay out of netstate and put it in client_t
@@ -281,12 +312,9 @@ static void GameGUIStart() {
                 printf("Changed interp delay to %d\n",client_st.NetState.interp_delay);
             }
             
-            i32 prev_wall_count=_mp.wall_count;
             update_player_controller(player,target_tick,&game_camera);
             
             bool update_health_display=false;
-            int p_health_before_update = player ? player->health : 0;
-            int p_money_before_update = player ? gs.money[player->id] : 0;
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
@@ -296,8 +324,9 @@ static void GameGUIStart() {
             // snapshot for 95 instead of sending each client just the snapshot for 100
             
             // snapshots
-            DWORD _merge_snapshots_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
-            if (_merge_snapshots_wait == WAIT_OBJECT_0) {
+            //DWORD _merge_snapshots_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
+            //if (_merge_snapshots_wait == WAIT_OBJECT_0) {
+            {
                 if (client_st._new_merge_snapshot) {
                     client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_st.merge_snapshots.begin(),client_st.merge_snapshots.end());
                     client_st.merge_snapshots.clear();
@@ -326,57 +355,33 @@ static void GameGUIStart() {
                     return ((game_state*)left.data)->tick < ((game_state*)right.data)->tick;//left.last_processed_command_tick[client_st.client_id] < right.last_processed_command_tick[client_st.client_id];
                 });
                 gs = *(game_state*)client_st.NetState.snapshots.back().data;
-                /*
-                for (auto snap=snapshots.end()-1;snap>=snapshots.begin();snap--) {
-                    if (snap->gms.tick <= target_tick-5) {
-                        gs = snap->gms;
-                        break;
-                    }
-                }
-                */
                 
-        snapshot_merge_finish:
-                
-                /*for (auto snap=snapshots.begin();snap<snapshots.end();snap++) {
-                    if (snap->gms.tick < target_tick - 180) {
-                        snap = snapshots.erase(snap);
-                        snap--;
-                    } else {
-                        break;
-                    }
-                    }*/
-                //client_st.NetState.snapshots.clear();
-                ReleaseMutex(client_st._mt_merge_snapshots);
+                //ReleaseMutex(client_st._mt_merge_snapshots);
             }
+    snapshot_merge_finish:
 
-            DWORD _merge_chat_wait = WaitForSingleObject(client_st._mt_merge_chat,0);
-            if (_merge_chat_wait == WAIT_OBJECT_0) {
+            //DWORD _merge_chat_wait = WaitForSingleObject(client_st._mt_merge_chat,0);
+            //if (_merge_chat_wait == WAIT_OBJECT_0) {
+            {
                 if (client_st.merge_chat.size() > 0) {
                     for (auto entry: client_st.merge_chat) {
                         add_to_chatlog(entry.name,entry.message,entry.tick,&chatlog_display);
                     }
                     client_st.merge_chat.clear();
                 }
-                ReleaseMutex(client_st._mt_merge_chat);
-            }
-            
-            while(gs.tick<target_tick) {
-                gs.update(client_st.NetState,tick_delta);
-                gs.tick++;
-            }
-            
-            if (gs.bomb_planted && target_tick >= gs.bomb_planted_tick && target_tick < gs.bomb_planted_tick+BOMB_TIME_TO_DETONATE*60) {
-                client_st.bomb_tick_timer -= (target_tick - o_num) * tick_delta;
-                if (client_st.bomb_tick_timer <= 0) {
-                    play_sfx(SfxType::BOMB_BEEP_SFX);
-                    double percentage_of_bomb_left = 1.0 - ((double)(target_tick-gs.bomb_planted_tick)/(double)(BOMB_TIME_TO_DETONATE*60));
-                    double time_to_next = 0.1 + 1.0 * percentage_of_bomb_left;
-                    time_to_next = MAX(time_to_next,0.15);
-                    
-                    client_st.bomb_tick_timer += time_to_next;
-                }
+                //ReleaseMutex(client_st._mt_merge_chat);
             }
 
+            {
+                //DWORD _map_wait = WaitForSingleObject(client_st._mt_map,0);
+                //if (_map_wait == WAIT_OBJECT_0) {
+                while(gs.tick<target_tick) {
+                    gs.update(client_st.NetState,tick_delta);
+                    gs.tick++;
+                }
+                //ReleaseMutex(client_st._mt_map);
+            }
+            
             for (i32 ind=0; ind<6;ind++) {
                 if (input.just_pressed[SDL_SCANCODE_5+ind]) {
                     queue_sound((SfxType)((i32)SfxType::VO_FAVORABLE+ind),client_st.client_id,target_tick);
@@ -482,89 +487,93 @@ static void GameGUIStart() {
                     input_send_timer.add(input_send_delta);
                 }
             }
-            
-            if (client_st.loaded_new_map) {
-                client_st.loaded_new_map=false;
-                // regenerate raycast points
-                auto &rps = client_sided_render_geometry.raycast_points;
-                rps.clear();
-                client_sided_render_geometry.segments.clear();
-                for (i32 n=0; n<_mp.wall_count; n++) {
-                    v2i wall=_mp.walls[n];
-                    rps.push_back(v2(wall.x,wall.y)*64);
-                    rps.push_back(v2(wall.x+1,wall.y)*64);
-                    rps.push_back(v2(wall.x,wall.y+1)*64);
-                    rps.push_back(v2(wall.x+1,wall.y+1)*64);
-                }
-                printf("Points before: %d\n",(i32)rps.size());
-                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
-                    return *(double*)&left < *(double*)&right;
-                });
-                std::unordered_map<double,int> p_set;
-                for (auto &p:rps) p_set[*(double*)&p]++;
 
-                // removes all points surrounded by tiles
-                for (auto pt=rps.begin();pt<rps.end();pt++) {
-                    i32 dupes=0;
-                    if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
-                    auto it=pt;
-                    while (it < rps.end()) {
-                        it++;
-                        if (*it == *pt) {
-                            dupes++;
+            //_map_wait = WaitForSingleObject(client_st._mt_map,0);
+            //if (_map_wait == WAIT_OBJECT_0) {
+            {
+                if (client_st.loaded_new_map && 1 == 0) {
+                    client_st.loaded_new_map=false;
+                    // regenerate raycast points
+                    auto &rps = client_sided_render_geometry.raycast_points;
+                    rps.clear();
+                    client_sided_render_geometry.segments.clear();
+                    for (i32 n=0; n<_mp.wall_count; n++) {
+                        v2i wall=_mp.walls[n];
+                        rps.push_back(v2(wall.x,wall.y)*64);
+                        rps.push_back(v2(wall.x+1,wall.y)*64);
+                        rps.push_back(v2(wall.x,wall.y+1)*64);
+                        rps.push_back(v2(wall.x+1,wall.y+1)*64);
+                    }
+                    printf("Points before: %d\n",(i32)rps.size());
+                    std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+                        return *(double*)&left < *(double*)&right;
+                    });
+                    std::unordered_map<double,int> p_set;
+                    for (auto &p:rps) p_set[*(double*)&p]++;
+
+                    // removes all points surrounded by tiles
+                    for (auto pt=rps.begin();pt<rps.end();pt++) {
+                        i32 dupes=0;
+                        if (pt!=rps.end()-1 && *(pt+1) != *pt) continue;
+                        auto it=pt;
+                        while (it < rps.end()) {
+                            it++;
+                            if (*it == *pt) {
+                                dupes++;
+                            } else {
+                                break;
+                            }
+                        }
+                    
+                        if (dupes==1 || dupes == 3) {
+                            rps.erase(pt,it);
+                            pt--;
                         } else {
-                            break;
+                            pt=it-1;
+                        }
+                    
+                    }
+                
+                    for (i32 ind=0; ind<_mp.wall_count; ind++) {
+                        v2 wall=_mp.walls[ind];
+                        v2 p1 = v2(wall.x,wall.y)*64;
+                        v2 p2 = v2(wall.x+1,wall.y)*64;
+                        v2 p3 = v2(wall.x,wall.y+1)*64;
+                        v2 p4 = v2(wall.x+1,wall.y+1)*64;
+
+                        bool fp1 = p_set[*(double*)&p1] != 4;
+                        bool fp2 = p_set[*(double*)&p2] != 4;
+                        bool fp3 = p_set[*(double*)&p3] != 4;
+                        bool fp4 = p_set[*(double*)&p4] != 4;
+
+                        if (fp1) {
+                            if (fp2)
+                                client_sided_render_geometry.segments.push_back({p1,p2});
+                            if (fp3)
+                                client_sided_render_geometry.segments.push_back({p1,p3});
+                        } if (fp4) {
+                            if (fp2)
+                                client_sided_render_geometry.segments.push_back({p2,p4});
+                            if (fp3)
+                                client_sided_render_geometry.segments.push_back({p3,p4});
                         }
                     }
-                    
-                    if (dupes==1 || dupes == 3) {
-                        rps.erase(pt,it);
-                        pt--;
-                    } else {
-                        pt=it-1;
-                    }
-                    
+                
+                    std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
+                        return *(double*)&left < *(double*)&right;
+                    });
+
+                    rps.erase(unique(rps.begin(),rps.end()),rps.end());
+                
+                    printf("Points after: %d\n",(i32)rps.size());
+
+                    std::sort( client_sided_render_geometry.segments.begin(), client_sided_render_geometry.segments.end(), [](auto&left,auto&right){
+                        return (*(double*)&left.p1 + *(double*)&left.p2) < (*(double*)&right.p1 + *(double*)&right.p2);
+                    });
+                    i32 s = (i32)client_sided_render_geometry.segments.size();
+                    client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
+                    printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
                 }
-                
-                for (i32 ind=0; ind<_mp.wall_count; ind++) {
-                    v2 wall=_mp.walls[ind];
-                    v2 p1 = v2(wall.x,wall.y)*64;
-                    v2 p2 = v2(wall.x+1,wall.y)*64;
-                    v2 p3 = v2(wall.x,wall.y+1)*64;
-                    v2 p4 = v2(wall.x+1,wall.y+1)*64;
-
-                    bool fp1 = p_set[*(double*)&p1] != 4;
-                    bool fp2 = p_set[*(double*)&p2] != 4;
-                    bool fp3 = p_set[*(double*)&p3] != 4;
-                    bool fp4 = p_set[*(double*)&p4] != 4;
-
-                    if (fp1) {
-                        if (fp2)
-                            client_sided_render_geometry.segments.push_back({p1,p2});
-                        if (fp3)
-                            client_sided_render_geometry.segments.push_back({p1,p3});
-                    } if (fp4) {
-                        if (fp2)
-                            client_sided_render_geometry.segments.push_back({p2,p4});
-                        if (fp3)
-                            client_sided_render_geometry.segments.push_back({p3,p4});
-                    }
-                }
-                
-                std::sort( rps.begin(), rps.end(), [](auto&left,auto&right){
-                    return *(double*)&left < *(double*)&right;
-                });
-
-                rps.erase(unique(rps.begin(),rps.end()),rps.end());
-                
-                printf("Points after: %d\n",(i32)rps.size());
-
-                std::sort( client_sided_render_geometry.segments.begin(), client_sided_render_geometry.segments.end(), [](auto&left,auto&right){
-                    return (*(double*)&left.p1 + *(double*)&left.p2) < (*(double*)&right.p1 + *(double*)&right.p2);
-                });
-                i32 s = (i32)client_sided_render_geometry.segments.size();
-                client_sided_render_geometry.segments.erase(unique(client_sided_render_geometry.segments.begin(),client_sided_render_geometry.segments.end()),client_sided_render_geometry.segments.end());
-                printf("Removed %d segments\n",(i32)client_sided_render_geometry.segments.size()-s);
             }
 
             
@@ -577,115 +586,18 @@ static void GameGUIStart() {
 
             
             // DRAW BEGIN
-            if (player) {
-                if (player->health != p_health_before_update) {
-                    gui_elements.health_text = generate_text(m5x7,std::to_string(player->health),{255,0,0,255});
-                    gui_elements.health_text.scale = {2,2};
-                    gui_elements.health_text.position = {16,720-16-(gui_elements.health_text.get_draw_irect().h)};
-                } if (player->reloading) {
-                    std::string reload_str = std::to_string(player->reload_timer);
-                    if (reload_str.size() > 3) {
-                        reload_str.erase(reload_str.begin()+3,reload_str.end());
-                    }
-                    gui_elements.reload_text = generate_text(m5x7,reload_str,{255,0,0,255});
-                    gui_elements.reload_text.position = player->pos + v2i(16-8,48);
-                    gui_elements.reload_text.position += v2(1280/2,720/2) - game_camera.pos;
-                }
-                // draw money
-                if (gs.money[player->id] != p_money_before_update) {
-                    gui_elements.money_text = generate_text(m5x7,"$" + std::to_string(gs.money[player->id])+"huh",{0,255,100,255});
-                    gui_elements.money_text.scale = {2,2};
-                    gui_elements.money_text.position = {16,16};
-                }
+            {
+                render_game_state(player,&game_camera);
             }
-
-            render_game_state(player,&game_camera);
             glUseProgram(sh_textureProgram);
             // gui
-            GL_DrawTexture(gui_elements.money_text.gl_texture,gui_elements.money_text.get_draw_irect());
             GL_DrawTexture(gui_elements.health_text.gl_texture,gui_elements.health_text.get_draw_irect());
             if (player) {
                 if (player->reloading) {
                     GL_DrawTexture(gui_elements.reload_text.gl_texture,gui_elements.reload_text.get_draw_irect());
                 }
             }
-
-            /*
-            // render the score at the end of the round
-            if (gs.one_remaining_tick!=0 && gs.tick > gs.one_remaining_tick) {
-                std::string left_str = std::to_string(gs.score[0]);
-                std::string right_str = std::to_string(gs.score[1]);
-                generic_drawable middle_text = generate_text(m5x7,"-",{0,0,0,255});
-                generic_drawable left_text = generate_text(m5x7,left_str,*(SDL_Color*)&gs.players[0].color);
-                generic_drawable right_text = generate_text(m5x7,right_str,*(SDL_Color*)&gs.players[1].color);
-                
-                middle_text.scale = {16,16};
-                left_text.scale = {16,16};
-                right_text.scale = {16,16};
-                middle_text.position = {1280/2 - middle_text.get_draw_rect().w/2,720/2+middle_text.get_draw_rect().h/2};
-                left_text.position = {middle_text.position.x - left_text.get_draw_rect().w-16,middle_text.position.y};
-                right_text.position = {middle_text.position.x + middle_text.get_draw_rect().w+16,middle_text.position.y};
-
-                SDL_Rect left_rect,middle_rect,right_rect;
-                left_rect = left_text.get_draw_rect();
-                middle_rect = middle_text.get_draw_rect();
-                right_rect = right_text.get_draw_rect();
-                SDL_RenderCopy(sdl_renderer,left_text.texture,NULL,&left_rect);
-                SDL_RenderCopy(sdl_renderer,middle_text.texture,NULL,&middle_rect);
-                SDL_RenderCopy(sdl_renderer,right_text.texture,NULL,&right_rect);
-            }
-
             
-            if (player) {
-                // draw abilities
-                generic_drawable cooldown_text;
-                std::string cooldown_str;
-                for (i32 ind=0;ind<4;ind++) {
-                    generic_drawable *sprite=&gui_elements.ability_sprites[ind];
-
-                    // render the box
-                    SDL_Rect dest = sprite->get_draw_rect();
-                    SDL_Rect sp_rect = sprite->get_draw_rect();
-                    SDL_RenderCopy(sdl_renderer,textures[TexType::UI_TEXTURE],NULL,&dest);
-                    SDL_RenderCopy(sdl_renderer,sprite->texture,(SDL_Rect*)&sprite->bound,&sp_rect);
-                    if (ind==0 && player->invisibility_cooldown > 0) {
-                        render_ability_sprite(sprite,player->invisibility_cooldown);
-                    } else if (ind == 1 && player->shield_cooldown > 0) {
-                        render_ability_sprite(sprite,player->shield_cooldown);
-                    } else if (ind == 2 && player->fireburst_cooldown > 0) {
-                        render_ability_sprite(sprite,player->fireburst_cooldown);
-                    } else if (ind == 3 && player->reloading) {
-                        render_ability_sprite(sprite,player->reload_timer);
-                    }
-                }
-                local_persist i32 ammo_cnt = 0;
-                if (player->bullets_in_mag != ammo_cnt) {
-                    ammo_cnt = player->bullets_in_mag;
-                    std::string ammo_str = std::to_string(ammo_cnt);
-                    gui_elements.magazine_cnt_text = generate_text(m5x7,ammo_str,{255,255,255,255});
-                    gui_elements.magazine_cnt_text.scale = {4,4};
-                    auto ab_pos = gui_elements.ability_sprites[3].get_draw_rect();
-                    gui_elements.magazine_cnt_text.position = {ab_pos.x+24-gui_elements.magazine_cnt_text.get_draw_rect().w/2,ab_pos.y+16};
-                }
-                SDL_Rect ammo_rect = gui_elements.magazine_cnt_text.get_draw_rect();
-                SDL_RenderCopy(sdl_renderer,gui_elements.magazine_cnt_text.texture,NULL,&ammo_rect);
-            }
-            */
-            // buy menu
-            if (gs.round_state == ROUND_BUYTIME) {
-                local_persist bool is_buy_menu_open = false;
-                if (input.just_pressed[SDL_SCANCODE_B]) {
-                    is_buy_menu_open = !is_buy_menu_open;
-                } if (is_buy_menu_open) {
-                    i32 width = 800;
-                    i32 height = 620;
-                    iRect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
-                    GL_DrawTexture(gl_textures[BUY_MENU_TEXTURE],dest);
-                    //SDL_RenderCopy(sdl_renderer,textures[BUY_MENU_TEXTURE],NULL,&dest);
-                }
-            }
-            
-
             local_persist bool chatbox_isopen=false;
             local_persist std::string chatbox_text="";
             if (chatbox_isopen == false && input.just_pressed[SDL_SCANCODE_T]) {
@@ -701,6 +613,27 @@ static void GameGUIStart() {
                 input.text_input_captured=false;
                 input.input_field = nullptr;
             }
+
+            GLuint colUni = glGetUniformLocation(sh_textureProgram, "color");
+
+            local_persist i32 selected_slot=0;
+            if (player) {
+                // draw inventory
+                for (i32 slot_ind=0;slot_ind<5;slot_ind++) {
+                    iRect src = {0,0,16,16};
+                    if (slot_ind == selected_slot) {
+                        src = {0,16,16,16};
+                    }
+                    iRect dest = {slot_ind*64+8,8,64,64};
+                    GL_DrawTexture(gl_textures[UI_TEXTURE],dest,src);
+                    if (player->inventory[slot_ind].type != IT_NONE)
+                    {
+                        iRect item_dest = {dest.x+8,dest.y+8,dest.w-16,dest.h-16};
+                        GL_DrawTexture(gl_textures[ITEM_TEXTURE],item_dest,get_item_rect(player->inventory[slot_ind].type));
+                    }
+                }
+            }
+            
 
             if (chatbox_isopen) {
                 // if you press the enter key, submit that field!
@@ -743,10 +676,6 @@ static void GameGUIStart() {
             }
 
             glUseProgram(sh_textureProgram);
-            /*
-            GLuint colUni = glGetUniformLocation(sh_textureProgram, "color");
-            glUniform4f(colUni,255,255,255,255);
-            */
             for (i32 ind=chatlog.entry_count-1;ind>=0;ind--) {
                 i32 fade_start_tick = chatlog.tick_added[ind]+(CHAT_MESSAGE_DISPLAY_TIME*60);
                 i32 fade_end_tick = fade_start_tick + (CHAT_FADE_LEN * 60);
@@ -765,7 +694,7 @@ static void GameGUIStart() {
             }
             
             // visualize net data
-            local_persist bool visualize_netgraph=true;
+            local_persist bool visualize_netgraph=false;
             if (input.just_pressed[SDL_SCANCODE_GRAVE]) {
                 visualize_netgraph = !visualize_netgraph;
             }
@@ -790,29 +719,30 @@ static void GameGUIStart() {
                 // scuffed ah line thickness work around lol
                 GL_DrawRect({timeline_x,timeline_y-1,timeline_w,timeline_h},{0,0,0,255});
 
-                for (i32 ind=begin_tick;ind<end_tick;ind++) {
+                for (i32 curr_tick=begin_tick;curr_tick<end_tick;curr_tick++) {
                     const int stride = (graph_box_rect.w-padding) / 60;
-                    i32 xpos = (ind-begin_tick) * stride + padding/2;
+                    i32 xpos = (curr_tick-begin_tick) * stride + padding/2;
                     v2i p1 = {graph_box_rect.x + xpos,timeline_y-3};
                     v2i p2 = {graph_box_rect.x + xpos,timeline_y+3};
                     Color col = {0,0,0,255};
-                    if (ind == target_tick) {
+                    if (curr_tick == target_tick) {
                         p1.y -= 16;
                         p2.y += 16;
                         col = {255,0,0,255};
-                    } else if (ind == interp_tick) {
+                    } else if (curr_tick == interp_tick) {
                         p1.y -= 8;
                         p2.y += 8;
                         col = {0,0,255,255};
                     }
                     i32 count=0;
-                    for (auto &snap:client_st.NetState.snapshots) {
-                        if ((*(game_state*)snap.data).tick==ind) {
+                    for (i32 n=0; n<client_st.NetState.snapshots.size(); n++) {
+                        game_state &gms = (*(game_state*)client_st.NetState.snapshots[n].data);
+                        if (gms.tick==curr_tick) {
                             count++;
                         }
                     }
                     if (count) {
-                        if (last_proc_tick > ind) {
+                        if (last_proc_tick > curr_tick) {
                             col = {0,255,0,255};
                         } else {
                             col = {0,255,0,255};
@@ -845,14 +775,12 @@ static void GameGUIStart() {
                 local_persist generic_drawable last_proc;
                 last_proc = generate_text(m5x7,last_input_processed_by_server_str, col, last_proc.gl_texture);
                 last_proc.position = curr_tick.position + v2(0,curr_tick.get_draw_irect().h + 4);
-                //last_proc.scale = {2,2};
 
                 glUseProgram(sh_textureProgram);
                 GL_DrawTexture(curr_tick.gl_texture,curr_tick.get_draw_irect());
                 GL_DrawTexture(last_proc.gl_texture,last_proc.get_draw_irect());
-                
             }
-        } else if (client_st.gms.state == GMS::PREGAME_SCREEN) {
+        } else if (curr_state == GMS::PREGAME_SCREEN) {
             // if the clock runs out, start the game
             double time_to_start=0.0;
             if (client_st.gms.counting_down_to_game_start) {
@@ -867,6 +795,7 @@ static void GameGUIStart() {
                         client_st.NetState.do_charas_interp[ind] = true;
                     }
                     client_st.NetState.do_charas_interp[client_st.client_id] = false;
+                    gs = {};
                     
                     goto endof_frame;
                 }
@@ -1018,20 +947,25 @@ static void demo() {
     */
 
 
-    RandomState rand;
-    random_engine_state = &rand;
     Random::Init();
 
-    const i32 MAP_SIZE = 8;
-    const i32 CHUNK_SIZE = 16;
-    perlin p_noise = create_perlin(MAP_SIZE,CHUNK_SIZE,3,0.65);
+    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
+    double white_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    generate_white_noise(&white_noise[0][0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,Random::seed);
 
-    GLuint gl_perlin_tex=NULL;
+    GLuint gl_perlin_tex=NULL, gl_white_tex=NULL;
     p_noise.generate_texture(&gl_perlin_tex);
-    /*
-    glGenTextures(1,&gl_perlin_tex);
-    GL_load_texture_from_surface(gl_perlin_tex,perlin_surface);
-    */
+    generate_texture_from_white_noise(&gl_white_tex,&white_noise[0][0],WORLD_SIZE*CHUNK_SIZE);
+
+
+    double height_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    generate_height_noisemap(height_noise[0],white_noise[0],WORLD_SIZE*CHUNK_SIZE,Random::seed);
+    
+    SDL_Surface *height_surf = generate_surface_from_height_noisemap(height_noise[0],WORLD_SIZE*CHUNK_SIZE);
+    GLuint gl_height_tex;
+    glGenTextures(1,&gl_height_tex);
+    GL_load_texture_from_surface(gl_height_tex,height_surf);
+    SDL_FreeSurface(height_surf);
     
     bool shadow_demo=true;
 
@@ -1118,7 +1052,7 @@ static void demo() {
             glBindFramebuffer(GL_FRAMEBUFFER,objects_fb);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-        
+            
             glUseProgram(sh_textureProgram);
             GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE], {300,400,64,64}, {0,0,32,32}, false, false, (float)elapsed);//,{300,600,64,64},{0,0,32,32},true);
             GL_DrawTexture(text_drawable.gl_texture,text_drawable.get_draw_irect());
@@ -1126,10 +1060,10 @@ static void demo() {
             glBindFramebuffer(GL_FRAMEBUFFER,shadow_fb);
             glClearColor(0.0f, 0.0f, 0.0f, 0.5f);
             glClear(GL_COLOR_BUFFER_BIT);
-        
+            
             glUseProgram(sh_colorProgram);
             glUniform4f(glGetUniformLocation(sh_colorProgram,"color"),1.0f,1.0f,1.0f,1.0f);
-        
+            
             for (i32 n=0;n<dests.size();n++) {
                 v2i pt=dests[n];
                 v2i prev_point=n==0?dests.back():dests[n-1];
@@ -1194,6 +1128,7 @@ static void demo() {
         } else {
             local_persist float zoom = 1.0f;
             local_persist v2i map_pos={128,32};
+            local_persist bool regenerate=false;
             
             if (input.scrolled_up && zoom < 16.f) {
                 zoom *= 2;
@@ -1214,10 +1149,10 @@ static void demo() {
 
             local_persist bool draw_tile_grid=false;
             local_persist bool draw_chunk_grid=true;
-            local_persist bool raw_view=false;
+            local_persist enum {VIEW_PERLIN, VIEW_WHITE, VIEW_HEIGHT, VIEW_WORLD} raw_view=VIEW_PERLIN;
 
             if (input.just_pressed[SDL_SCANCODE_E]) {
-                raw_view = !raw_view;
+                raw_view = (raw_view==VIEW_PERLIN?VIEW_WHITE:raw_view==VIEW_WHITE?VIEW_HEIGHT:raw_view==VIEW_HEIGHT?VIEW_WORLD:VIEW_PERLIN);
             }
             if (input.just_pressed[SDL_SCANCODE_R]) {
                 draw_tile_grid = !draw_tile_grid;
@@ -1233,9 +1168,13 @@ static void demo() {
             i32 relative_chunk_size = relative_tile_size * p_noise.chunk_size;
             i32 relative_map_size = relative_chunk_size * p_noise.map_size;
 
-            if (raw_view) {
+            if (raw_view == VIEW_PERLIN) {
                 GL_DrawTexture(gl_perlin_tex,dest);
-            } else {
+            } else if (raw_view == VIEW_HEIGHT) {
+                GL_DrawTexture(gl_height_tex,dest);
+            } else if (raw_view == VIEW_WHITE) {
+                GL_DrawTexture(gl_white_tex,dest);
+            } else if (raw_view == VIEW_WORLD) {
                 i32 map_size_pixels_total = p_noise.map_size * p_noise.chunk_size * 16;
                 glm::mat4 larger_projection = glm::ortho(0.0f, static_cast<float>(map_size_pixels_total), static_cast<float>(map_size_pixels_total), 0.0f, -1.0f, 1.0f);
                 GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
@@ -1251,58 +1190,32 @@ static void demo() {
                     }
                     GL_load_texture_for_framebuffer(gl_real_tex,map_size_pixels_total,map_size_pixels_total);
                     GLuint gl_real_fb = GL_create_framebuffer(gl_real_tex);
+
                     glBindFramebuffer(GL_FRAMEBUFFER,gl_real_fb);
                     glClearColor(0.0f,1.0f,1.0f,1.0f);
                     local_persist SDL_Surface *p_surf = p_noise.generate_surface();
-
-                    enum TILE_TYPE {
-                        DIRT,
-                        GRASS,
-                        WATER,
-                        STONE,
-                        SAND,
-                        TREE,
-                        COUNT
-                    };
                     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(larger_projection));
-                    glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);
+                    glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);                    
 
                     glUseProgram(sh_textureProgram);
                     for (i32 x=0;x<p_noise.map_size*p_noise.chunk_size;x++) {
                         for (i32 y=0;y<p_noise.map_size*p_noise.chunk_size;y++) {
-                            double noise_val = MAX(MIN(p_noise.noise(x,y),1.0),-1.0);
                             iRect src={0,0,16,16};
-                            TILE_TYPE tt;
-                            if (noise_val < -0.65) {
-                                tt = TILE_TYPE::WATER;
-                            } else if (noise_val < -0.58) {
-                                tt = TILE_TYPE::SAND;
-                            } else if (noise_val < -0.45) {
-                                tt = TILE_TYPE::DIRT;
-                            } else if (noise_val < -0.35) {
-                                tt = TILE_TYPE::STONE;
-                            } else if (noise_val < -0.1) {
-                                tt = TILE_TYPE::DIRT;
-                            } else if (noise_val < 0.5) {
-                                tt = TILE_TYPE::GRASS;
-                            } else if (noise_val < 0.55) {
-                                tt = TILE_TYPE::DIRT;
-                            } else {
-                                tt = TILE_TYPE::TREE;
-                            }
+                            TILE_TYPE tt=determine_tile(x,y,p_noise,white_noise[0],height_noise[0]);
+                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,p_noise,white_noise[0],height_noise[0]);
 
-                            if (tt == TILE_TYPE::WATER) {
-                                src = {32,0,16,16};
-                            } else if (tt == TILE_TYPE::DIRT) {
-                                src = {16,32,16,16};
-                            } else if (tt == TILE_TYPE::STONE) {
-                                src = {0,32,16,16};
-                            } else if (tt == TILE_TYPE::GRASS) {
-                                src = {0,16,16,16};
-                            } else if (tt == TILE_TYPE::SAND) {
-                                src = {16,16,16,16};
-                            } else if (tt == TILE_TYPE::TREE) {
+                            if (wo_tt == WORLD_OBJECT_TYPE::WO_TREE) {
                                 src = {0,48,16,16};
+                            } else if (tt == TILE_TYPE::TT_WATER) {
+                                src = {32,0,16,16};
+                            } else if (tt == TILE_TYPE::TT_DIRT) {
+                                src = {16,32,16,16};
+                            } else if (tt == TILE_TYPE::TT_STONE) {
+                                src = {0,32,16,16};
+                            } else if (tt == TILE_TYPE::TT_GRASS) {
+                                src = {0,16,16,16};
+                            } else if (tt == TILE_TYPE::TT_SAND) {
+                                src = {16,16,16,16};
                             }
                             iRect tt_dest = {x*16,y*16,16,16};
 
@@ -1316,7 +1229,7 @@ static void demo() {
                     up_to_date=true;
                 }
                 glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
-                GL_DrawTexture(gl_real_tex,dest);
+                GL_DrawTextureEx(gl_real_tex,dest,{0,0,0,0},false,true);
             }
             if (draw_tile_grid) {
                 for (i32 x=0; x<p_noise.chunk_size*p_noise.map_size+1; x++) {

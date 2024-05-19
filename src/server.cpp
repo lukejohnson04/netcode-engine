@@ -207,8 +207,22 @@ static void server(int port) {
     DWORD ThreadID=0;
     HANDLE thread_handle = CreateThread(0, 0, &ServerListen, (LPVOID)&connect_socket, 0, &ThreadID);
 
+#ifdef PROFILE_BUILD
+    timer_t perfCounter;
+    perfCounter.Start();
+#endif
     initialize_systems("server",false,false);
+
+#ifdef PROFILE_BUILD
+    double system_init_time = perfCounter.get();
+#endif
     init_textures();
+    
+#ifdef PROFILE_BUILD
+    double texture_init_time = perfCounter.get();
+    std::cout << "Took " << system_init_time << " seconds to initialize systems" << std::endl;
+    std::cout << "Took " << texture_init_time-system_init_time << " seconds to initialize textures" << std::endl;
+#endif
 
     bool running=true;
 
@@ -429,10 +443,12 @@ static void server(int port) {
                 LARGE_INTEGER curr = gl_server.timer.get_high_res_elapsed();
                 if (gl_server.gms.game_start_time.QuadPart - curr.QuadPart <= 0) {
                     // game_start
-                    gamestate_load_map(gl_server.gms,MAP_DE_DUST2);
+                    load_new_game();
 
                     // is this correct..?
                     snap_clock.start_time = gl_server.gms.game_start_time;
+                    gl_server.gms.counting_down_to_game_start=false;
+                    gl_server.gms.state = GMS::GAME_PLAYING;
                     
                     goto endof_frame;                    
                 }
@@ -459,8 +475,10 @@ static void server(int port) {
                     packet_t p = {};
                     p.type = GAME_START_ANNOUNCEMENT;
                     p.data.game_start_info.start_time = gl_server.gms.game_start_time;
-                    p.data.game_start_info.map_id = MAP_DE_DUST2;
                     p.data.game_start_info.gmode = gl_server.gms.gmode;
+
+                    Random::Init();
+                    p.data.game_start_info.seed = Random::seed;
                     broadcast(&p);
                     gl_server.gms.counting_down_to_game_start=true;
                 }

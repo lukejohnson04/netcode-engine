@@ -15,6 +15,8 @@ struct client_t {
     std::vector<snapshot_t> merge_snapshots;
     std::vector<chatline_props> merge_chat;
 
+    std::queue<packet_t> packet_queue;
+
     overall_game_manager &gms=NetState.gms;
 
     bool init_ok=false;
@@ -38,9 +40,10 @@ struct client_t {
     std::string username="";
 
     bool loaded_new_map=false;
+    bool load_new_map_signal=false;
 
     // mutex
-    HANDLE _mt_merge_snapshots, _mt_merge_chat;
+    HANDLE _mt_merge_snapshots, _mt_merge_chat, _mt_map, _mt_gms, _mt_packet_queue;
     bool _new_merge_snapshot=false;
     i32 _last_proc_tick_buffer=0;
 };
@@ -53,6 +56,84 @@ internal void add_command_to_recent_commands(command_t cmd) {
     client_st.NetState.command_stack.push_back(node);
 }
 
+internal void process_packet(packet_t pc) {
+    if (pc.type == NEW_CLIENT_CONNECTED) {
+        //WaitForSingleObject(client_st._mt_gms,INFINITE);
+        client_st.gms.connected_players++;
+        //ReleaseMutex(client_st._mt_gms);
+
+    } else if (pc.type == INFO_DUMP_ON_CONNECTED) {
+        //WaitForSingleObject(client_st._mt_gms,INFINITE);
+        client_st.gms.connected_players=pc.data.info_dump_on_connected.client_count;
+        client_st.client_id = client_st.gms.connected_players-1;
+        printf("there are %d connceted players\n",client_st.gms.connected_players);
+        //ReleaseMutex(client_st._mt_gms);
+            
+    } else if (pc.type == SNAPSHOT_TRANSIENT_DATA) {
+        //WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
+
+        client_st.merge_snapshots.push_back(pc.data.snapshot);
+        client_st._new_merge_snapshot = true;
+        client_st._last_proc_tick_buffer=MAX(client_st._last_proc_tick_buffer,pc.data.snapshot.last_processed_command_tick[client_st.client_id]);
+
+        //ReleaseMutex(client_st._mt_merge_snapshots);
+            
+    } else if (pc.type == SNAPSHOT_PERSIST_DATA) {
+            
+    } else if (pc.type == COMMAND_CALLBACK_INFO) {
+        for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
+            if (pc.data.command_callback_info.sounds[ind].type == SfxType::PLANT_FINISHED_SFX) {
+                printf("Plant finished sound\n");
+            }
+            queue_sound(pc.data.command_callback_info.sounds[ind]);
+        }
+                        
+    } else if (pc.type == SNAPSHOT_TRANSIENT_DATA) {
+        //WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
+
+        client_st.merge_snapshots.push_back(pc.data.snapshot);
+        client_st._new_merge_snapshot = true;
+        client_st._last_proc_tick_buffer=MAX(client_st._last_proc_tick_buffer,pc.data.snapshot.last_processed_command_tick[client_st.client_id]);
+
+        //ReleaseMutex(client_st._mt_merge_snapshots);
+            
+    } else if (pc.type == COMMAND_CALLBACK_INFO) {
+        for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
+            if (pc.data.command_callback_info.sounds[ind].type == SfxType::PLANT_FINISHED_SFX) {
+                printf("Plant finished sound\n");
+            }
+            queue_sound(pc.data.command_callback_info.sounds[ind]);
+        }
+
+    } else if (pc.type == GAME_START_ANNOUNCEMENT) {
+        std::cout << "Recieved game start announcement\n";
+
+        //WaitForSingleObject(client_st._mt_gms,INFINITE);
+        client_st.gms.game_start_time = pc.data.game_start_info.start_time;
+        client_st.gms.counting_down_to_game_start=true;
+        client_st.gms.gmode = pc.data.game_start_info.gmode;
+
+        Random::Init(pc.data.game_start_info.seed);
+        load_new_game();
+        client_st.loaded_new_map=true;
+
+    } else if (pc.type == CHAT_MESSAGE) {
+        //WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
+        printf("Received chat message from the server\n");
+        std::string name(pc.data.chat_message.name);
+        std::string message(pc.data.chat_message.message);
+        std::cout << name << ": " << message << std::endl;
+
+        client_st.merge_chat.push_back({name,message,client_st.last_tick_processed});
+        //ReleaseMutex(client_st._mt_merge_chat);
+
+    } else {
+        // this gets called when it times out each time from no packet recieved
+        printf("wtf\n");
+    }
+}
+
+
 
 DWORD WINAPI ClientListen(LPVOID lpParamater) {
     const int connect_socket = *(int*)lpParamater;
@@ -64,57 +145,9 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
         packet_t pc = {};
         int ret = recieve_packet(connect_socket,&servaddr,&pc);
 
-        if (pc.type == NEW_CLIENT_CONNECTED) {
-            client_st.gms.connected_players++;
-
-        } else if (pc.type == INFO_DUMP_ON_CONNECTED) {
-            client_st.gms.connected_players=pc.data.info_dump_on_connected.client_count;
-            client_st.client_id = client_st.gms.connected_players-1;
-            printf("%d\n",client_st.gms.connected_players);
-                        
-        } else if (pc.type == SNAPSHOT_TRANSIENT_DATA) {
-            WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
-
-            client_st.merge_snapshots.push_back(pc.data.snapshot);
-            client_st._new_merge_snapshot = true;
-            client_st._last_proc_tick_buffer=MAX(client_st._last_proc_tick_buffer,pc.data.snapshot.last_processed_command_tick[client_st.client_id]);
-
-            ReleaseMutex(client_st._mt_merge_snapshots);
-            
-        } else if (pc.type == SNAPSHOT_PERSIST_DATA) {
-            
-        } else if (pc.type == COMMAND_CALLBACK_INFO) {
-            for (i32 ind=0;ind<pc.data.command_callback_info.count;ind++) {
-                if (pc.data.command_callback_info.sounds[ind].type == SfxType::PLANT_FINISHED_SFX) {
-                    printf("Plant finished sound\n");
-                }
-                queue_sound(pc.data.command_callback_info.sounds[ind]);
-            }
-
-        } else if (pc.type == GAME_START_ANNOUNCEMENT) {
-            client_st.gms.game_start_time = pc.data.game_start_info.start_time;
-            client_st.gms.counting_down_to_game_start=true;
-            client_st.gms.gmode = pc.data.game_start_info.gmode;
-            // start game protocol for client
-            if (client_st.gms.gmode == GM_STRIKE) {
-                load_permanent_data_from_map(pc.data.game_start_info.map_id);
-            }
-            client_st.loaded_new_map=true;
-
-        } else if (pc.type == CHAT_MESSAGE) {
-            WaitForSingleObject(client_st._mt_merge_snapshots,INFINITE);
-            printf("Received chat message from the server\n");
-            std::string name(pc.data.chat_message.name);
-            std::string message(pc.data.chat_message.message);
-            std::cout << name << ": " << message << std::endl;
-
-            client_st.merge_chat.push_back({name,message,client_st.last_tick_processed});
-            ReleaseMutex(client_st._mt_merge_chat);
-
-        } else {
-            // this gets called when it times out each time from no packet recieved
-            printf("wtf\n");
-        }
+        WaitForSingleObject(client_st._mt_packet_queue,INFINITE);
+        client_st.packet_queue.push(pc);
+        ReleaseMutex(client_st._mt_packet_queue);
     }
     closesocket(connect_socket);
     return 0;
@@ -211,6 +244,9 @@ static void client_connect(int port,std::string ip_addr) {
 
     client_st._mt_merge_snapshots = CreateMutex(NULL,FALSE,NULL);
     client_st._mt_merge_chat = CreateMutex(NULL,FALSE,NULL);
+    client_st._mt_map = CreateMutex(NULL,FALSE,NULL);
+    client_st._mt_gms = CreateMutex(NULL,FALSE,NULL);
+    client_st._mt_packet_queue = CreateMutex(NULL,FALSE,NULL);
 
 #ifndef RELEASE_BUILD
     client_st.username = "Player"+std::to_string(client_st.client_id);

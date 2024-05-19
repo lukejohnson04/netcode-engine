@@ -12,6 +12,45 @@ struct perlin {
     void generate_texture(GLuint *texture);
 };
 
+
+void generate_white_noise(double *arr, int n, u32 seed) {
+    std::mt19937 rand(seed);
+    std::uniform_real_distribution<double> distribution(0.0, 1.0);
+    for (i32 ind=0;ind<n;ind++) {
+        arr[ind] = distribution(rand);
+    }
+}
+
+void generate_height_noisemap(double *arr, double *white_noise, int map_size, u32 seed) {
+    for (i32 x=0;x<map_size;x++) {
+        for (i32 y=0;y<map_size;y++) {
+            v2d normalized_coords = {(double)x/(double)map_size,(double)y/(double)map_size};
+            double dist = ddistance_between_points(normalized_coords,{0.5,0.5}) * 2.0;
+            double val = -(pow(abs(0.85*dist),3)) + 1;
+            double white_val = white_noise[x*map_size+y];
+            val += (white_val-0.5) / 8.0;
+            
+            val = MAX(MIN(val,1.0),0.0);
+
+            arr[x*map_size+y] = val;
+        }
+    }
+}
+
+SDL_Surface *generate_surface_from_height_noisemap(double *arr, int map_size) {
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0,map_size,map_size,32,SDL_PIXELFORMAT_ARGB8888);
+    for (i32 x=0; x<map_size; x++) {
+        for (i32 y=0; y<map_size; y++) {
+            double noise_val = arr[x*map_size+y];
+            u8 val = (u8)(noise_val * 255.0);
+            Color col = {val,val,val,255};
+            setpixel(surface,x,y,col);
+        }
+    }
+    return surface;
+}
+
+
 perlin create_perlin(i32 n_map_size, i32 n_chunk_size, i32 n_octaves, double n_persistance) {
     perlin p;
     p.octaves = n_octaves;
@@ -93,7 +132,7 @@ SDL_Surface *perlin::generate_surface() {
             double noise_val = MAX(MIN(noise(x,y),1.0),-1.0);
             u8 val = (u8)(((noise_val+1)/2)*255.f);
             Color col = {val,val,val,255};
-            setpixel(surface,x,y,col);            
+            setpixel(surface,x,y,col);
         }
     }
     return surface;
@@ -108,4 +147,24 @@ void perlin::generate_texture(GLuint *texture) {
     SDL_Surface *perlin_surface = generate_surface();
     GL_load_texture_from_surface(*texture,perlin_surface);
     SDL_FreeSurface(perlin_surface);
+}
+
+
+void generate_texture_from_white_noise(GLuint *texture,double *noise,int n) {
+    if (*texture) {
+        glDeleteTextures(1,texture);
+    }
+    glGenTextures(1,texture);
+
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0,n,n,32,SDL_PIXELFORMAT_ARGB8888);
+    for (i32 x=0;x<n;x++) {
+        for (i32 y=0;y<n;y++) {
+            double noise_val = MAX(MIN(noise[x*n+y],1.0),-1.0);
+            u8 val = (u8)((noise_val)*255.f);
+            Color col = {val,val,val,255};
+            setpixel(surface,x,y,col);
+        }
+    }
+    GL_load_texture_from_surface(*texture,surface);
+    SDL_FreeSurface(surface);
 }

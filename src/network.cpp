@@ -72,6 +72,7 @@ struct packet_t {
             LARGE_INTEGER start_time;
             i32 map_id;
             GAME_MODE gmode;
+            u32 seed;
         } game_start_info;
         
         overall_game_manager gms;
@@ -102,41 +103,3 @@ inline int recieve_packet(int socket, sockaddr_in *addr, packet_t *p) {
     return recvfrom(socket, (char*)p, sizeof(packet_t), 0,
                     (struct sockaddr *)addr, &addr_len);
 }
-
-struct timer_t {
-    LARGE_INTEGER start_time,frequency;
-    LARGE_INTEGER temp_offset;
-
-    timer_t() {
-        if (!QueryPerformanceFrequency(&frequency)) {
-            std::cerr << "High-resolution performance counter not supported." << std::endl;
-            return;
-        }
-    }
-
-    void Start() {
-        QueryPerformanceCounter(&start_time);
-    }
-
-    inline LARGE_INTEGER get_high_res_elapsed() {
-        LARGE_INTEGER end;
-        QueryPerformanceCounter(&end);
-        end.QuadPart -= start_time.QuadPart;
-        return end;
-    }
-    
-    double get() {
-        LARGE_INTEGER end;
-        QueryPerformanceCounter(&end);
-        // Calculate the interval in seconds
-        return static_cast<double>(end.QuadPart - start_time.QuadPart) / frequency.QuadPart;
-    }
-
-    void add(double time) {
-        start_time.QuadPart += static_cast<LONGLONG>(time)*frequency.QuadPart;
-    }
-
-    void Restart() {
-        QueryPerformanceCounter(&start_time);
-    }
-};

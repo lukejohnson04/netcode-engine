@@ -12,6 +12,7 @@ enum TexType {
     UI_TEXTURE,
     BUY_MENU_WEAPONS_TEXTURE,
     BUY_MENU_TEXTURE,
+    MINIMAP_TEXTURE,
 
     // metagame
     LEVEL_TEXTURE,
@@ -20,6 +21,7 @@ enum TexType {
     TX_GAME_WORLD,
     TX_GAME_OBJECTS,
     TX_SHADOW,
+    TX_MINIMAP,
     
     TEXTURE_COUNT
 };
@@ -41,6 +43,7 @@ enum VboType {
 enum FrameBufferType {
     FB_GAME_WORLD,
     FB_GAME_OBJECTS,
+    FB_MINIMAP,
     FB_SHADOW,
     FB_COUNT
 };
@@ -49,7 +52,6 @@ enum FrameBufferType {
 GLuint sh_textureProgram, sh_colorProgram, sh_modProgram;
 TTF_Font *m5x7=nullptr;
 
-SDL_Texture *textures[TEXTURE_COUNT] = {nullptr};
 GLuint gl_textures[TEXTURE_COUNT] = {NULL};
 GLuint gl_varrays[VAO_COUNT] = {NULL};
 GLuint gl_vbuffers[VBO_COUNT] = {NULL};
@@ -142,7 +144,6 @@ internal void GL_load_texture(GLuint tex, const char* path) {
     int Mode = GL_RGB;
     if(tex_surf->format->BytesPerPixel == 4) {
         Mode = GL_RGBA;
-        printf("alpha");
     }
 
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -267,12 +268,15 @@ static void init_textures() {
     GL_load_texture_for_framebuffer(gl_textures[TX_GAME_OBJECTS]);
     GL_load_texture_for_framebuffer(gl_textures[TX_GAME_WORLD]);
     GL_load_texture_for_framebuffer(gl_textures[TX_SHADOW]);
+    GL_load_texture_for_framebuffer(gl_textures[TX_MINIMAP],128,128);
     glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_SHADOW]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_SHADOW], 0);
     glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_OBJECTS]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_GAME_OBJECTS], 0);
     glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_GAME_WORLD]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_GAME_WORLD], 0);
+    glBindFramebuffer(GL_FRAMEBUFFER,gl_framebuffers[FB_MINIMAP]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_textures[TX_MINIMAP], 0);
     glBindFramebuffer(GL_FRAMEBUFFER,0);
 
     GL_load_texture(gl_textures[PLAYER_TEXTURE],"res/charas.png");    
@@ -287,6 +291,7 @@ static void init_textures() {
     GL_load_texture(gl_textures[TILE_TEXTURE],"res/tiles.png");
     GL_load_texture(gl_textures[ITEM_TEXTURE],"res/items.png");
     GL_load_texture(gl_textures[RAYCAST_DOT_TEXTURE],"res/dot.png");
+    GL_load_texture(gl_textures[MINIMAP_TEXTURE],"res/minimap.png");
 
     //GL_load_texture(gl_textures[WORLD_OBJECTS_TEXTURE],"res/dot.png");
     // come back to this
@@ -366,6 +371,7 @@ struct character;
 struct camera_t {
     v2 pos={0,0};
     v2 size = {1280,720};
+    float zoom=1.0f;
     union {
         character *follow;
     };
