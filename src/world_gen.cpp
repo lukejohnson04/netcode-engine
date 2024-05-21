@@ -2,6 +2,7 @@
 #define WORLD_SIZE 8
 #define CHUNK_SIZE 16
 
+
 enum TILE_TYPE : u8 {
     TT_NONE,
     TT_GROUND,
@@ -25,8 +26,61 @@ enum WORLD_OBJECT_TYPE : u8 {
     WO_TREE,
     WO_STONE,
     WO_WOODEN_FENCE,
+    WO_BEACON,
     WO_COUNT
 };
+
+struct world_object_t {
+    v2 pos;
+    WORLD_OBJECT_TYPE type;
+
+    union {
+        i32 took_damage_tick;
+    };
+    i16 health=100;
+};
+
+
+struct world_chunk_t {
+    TILE_TYPE tiles[CHUNK_SIZE][CHUNK_SIZE] = {{TT_NONE}};
+    static constexpr i32 world_object_limit = (CHUNK_SIZE*CHUNK_SIZE)/2;
+
+    i32 world_object_count=0;
+    world_object_t world_objects[world_object_limit];
+
+    inline
+    void add_world_object(world_object_t n_object) {
+        assert(world_object_count<world_object_limit);
+        world_objects[world_object_count++] = n_object;
+    }
+};
+
+
+struct generic_map_t {
+    i32 wall_count=0;
+    v2i walls[WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE];
+
+    world_chunk_t chunks[WORLD_SIZE][WORLD_SIZE]={};
+
+    void add_wall(v2i pos) {
+        walls[wall_count++] = pos;
+    }
+};
+
+
+iRect get_wobject_draw_rect(WORLD_OBJECT_TYPE type) {
+    if (type == WO_TREE) {
+        return {0,64,48,64};
+    } else if (type == WO_STONE) {
+        return {48,48,32,32};
+    } else if (type == WO_WOODEN_FENCE) {
+        return {48,96,32,32};
+    } else if (type == WO_BEACON) {
+        return {80,64,32,64};
+    }
+    return {0,0,0,0};
+}
+
 
 struct world_generation_props {
     u32 seed_terrain;
@@ -105,7 +159,68 @@ WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, perlin &p_noise, double *
         double tree_roll = tree_noise[ind]/1.25;
         if (tree_roll > 1.0-tree_spawn_chance) {
             wo_tt = WORLD_OBJECT_TYPE::WO_TREE;
+            return wo_tt;
         }
     }
+    
     return wo_tt;
+}
+
+internal
+void generate_world(generic_map_t *mp) {
+    timer_t perfCounter;
+    perfCounter.Start();
+    
+    *mp = {};
+
+    world_generation_props gen_props = generate_generation_props(Random::seed);
+    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
+    constexpr i32 tiles_in_world = WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE;
+
+    double tree_noise[tiles_in_world];
+    generate_white_noise(tree_noise,tiles_in_world,gen_props.seed_tree_noise);
+    double height_noise[tiles_in_world];
+    generate_height_noisemap(height_noise,WORLD_SIZE*CHUNK_SIZE,gen_props.seed_height_noise);
+    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    {
+        perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
+        for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
+            for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
+                stone_noise[x][y] = p_stone.noise(x,y);
+            }
+        }
+    }
+    i32 stone=0;
+
+    for (i32 cy=0;cy<WORLD_SIZE;cy++) {
+        for (i32 cx=0;cx<WORLD_SIZE;cx++) {
+            world_chunk_t chunk = {};
+
+            for (i32 y=0;y<CHUNK_SIZE;y++) {
+                for (i32 x=0;x<CHUNK_SIZE;x++) {
+                    i32 global_x = cx*CHUNK_SIZE+x;
+                    i32 global_y = cy*CHUNK_SIZE+y;
+                    
+                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
+                    chunk.tiles[x][y] = tt;
+                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
+                    if (wo_tt != WO_NONE) {
+                        if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) stone++;
+                        world_object_t n_obj = {};
+                        n_obj.type = wo_tt;
+                        n_obj.took_damage_tick=0;
+                        n_obj.pos = {(float)global_x*64.f,(float)global_y*64.f};
+                        mp->add_wall({global_x,global_y});
+                        chunk.add_world_object(n_obj);
+                    }
+                }
+            }
+            mp->chunks[cx][cy] = chunk;
+        }
+    }
+    std::cout << "Generated " << stone << " stone\n";
+
+    double elapsed = perfCounter.get();
+    std::cout << "World generation took " << elapsed << " seconds" << std::endl;
+    
 }

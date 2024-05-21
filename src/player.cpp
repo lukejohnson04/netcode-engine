@@ -5,7 +5,9 @@ enum {
     CMD_RIGHT,
     CMD_UP,
     CMD_DOWN,
+    
     CMD_PUNCH,
+    CMD_ACTION,
     
     // shoot is bullet
     CMD_RELOAD,
@@ -52,6 +54,7 @@ struct command_t {
         float rot;
         i32 damage;
         i32 purchase;
+        ITEM_TYPE selected_item;
     } props;
 };
 
@@ -131,6 +134,7 @@ struct character {
     // inventory
     static constexpr i32 INVENTORY_SIZE=5;
     inventory_item_t inventory[INVENTORY_SIZE]={};
+    ITEM_TYPE current_equipped_item=IT_NONE;
 
     inline
     bool get_command_state(u16 cmd_to_test) {
@@ -180,11 +184,11 @@ void update_player_controller(character *player, int tick, camera_t *game_camera
     } else if (input.just_released[SDL_SCANCODE_S]) {
         new_commands[cmd_count++] = {CMD_DOWN,false,tick,player->id};
     } if (input.mouse_just_pressed) {
-        new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
+        command_t n_cmd = {CMD_ACTION,true,tick,player->id};
+        n_cmd.props.selected_item = player->inventory[inventory_ui.selected_slot].type;
+        new_commands[cmd_count++] = n_cmd;
     } if (input.just_pressed[SDL_SCANCODE_R]) {
         new_commands[cmd_count++] = {CMD_RELOAD,true,tick,player->id};
-    } if (input.mouse_just_pressed) {
-        new_commands[cmd_count++] = {CMD_PUNCH,true,tick,player->id};
     }
 
     for (u32 id=0; id < cmd_count; id++) {
@@ -211,10 +215,19 @@ int process_command(character *player, command_t cmd) {
             player->reload_timer=2.0;
             queue_sound(SfxType::FLINTLOCK_RELOAD_SFX,player->id,cmd.tick);
         }
+    } else if (cmd.code == CMD_ACTION) {
+        if (cmd.props.selected_item != IT_WOODEN_FENCE) {
+            player->curr_state = character::PUNCHING;
+            player->state_timer = 0.2f;
+            player->has_hit_something_yet=false;
+            player->current_equipped_item=cmd.props.selected_item;
+        }
+        /*
     } else if (cmd.code == CMD_PUNCH) {
         player->curr_state = character::PUNCHING;
         player->state_timer = 0.2f;
         player->has_hit_something_yet=false;
+        */
     } else {
         if (cmd.press) {
             set_command_state(player->command_state,cmd.code);

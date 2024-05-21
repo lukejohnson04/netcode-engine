@@ -9,43 +9,6 @@ enum ROUND_STATE {
     ROUND_STATE_COUNT
 };
 
-struct world_object_t {
-    v2 pos;
-    WORLD_OBJECT_TYPE type;
-
-    union {
-        i32 took_damage_tick;
-    };
-    i16 health=100;
-};
-
-
-struct world_chunk_t {
-    TILE_TYPE tiles[CHUNK_SIZE][CHUNK_SIZE] = {{TT_NONE}};
-    static constexpr i32 world_object_limit = (CHUNK_SIZE*CHUNK_SIZE)/2;
-
-    i32 world_object_count=0;
-    world_object_t world_objects[world_object_limit];
-
-    inline
-    void add_world_object(world_object_t n_object) {
-        assert(world_object_count<world_object_limit);
-        world_objects[world_object_count++] = n_object;
-    }
-};
-
-
-struct generic_map_t {
-    i32 wall_count=0;
-    v2i walls[WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE];
-
-    world_chunk_t chunks[WORLD_SIZE][WORLD_SIZE]={};
-
-    void add_wall(v2i pos) {
-        walls[wall_count++] = pos;
-    }
-};
-
 
 // should be called world state instead of game state
 struct game_state {
@@ -132,11 +95,10 @@ global_variable game_state gs;
 global_variable generic_map_t _mp;
 
 void load_new_game() {
-    timer_t perfCounter;
-    perfCounter.Start();
     
     gs = {};
-    _mp = {};
+    generate_world(&_mp);
+    /*
 
     world_generation_props gen_props = generate_generation_props(Random::seed);
     perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
@@ -184,15 +146,14 @@ void load_new_game() {
         }
     }
     std::cout << "Generated " << stone << " stone\n";
-
+    */
     character &player = gs.players[gs.player_count];
     player = create_player({200,200},(entity_id)(gs.player_count));
     add_to_inventory(player.inventory,character::INVENTORY_SIZE,{IT_WOODEN_FENCE,10});
     player.color = {(u8)(rand() % 255), (u8)(rand() % 255), (u8)(rand() % 255), 255};
     gs.player_count++;
 
-    double elapsed = perfCounter.get();
-    std::cout << "World generation took " << elapsed << " seconds" << std::endl;
+    
 }
 
 
@@ -242,12 +203,19 @@ void game_state::update(netstate_info_t &c, double delta) {
                 for (i32 p_ind=0;p_ind<punching_players_count;p_ind++) {
                     character *player = punching_players[p_ind];
                     iRect p_rect = {(i32)player->pos.x,(i32)player->pos.y,64,64};
-
+                    
                     if (rects_collide(p_rect,tree_rect)) {
                         player->has_hit_something_yet=true;
                         wo_tt->took_damage_tick = tick;
-                        
-                        wo_tt->health -= 15;
+
+                        // default fist damage
+                        i16 dmg=15;
+                        if (player->current_equipped_item==IT_WOODEN_PICKAXE) {
+                            if (wo_tt->type == WO_STONE) {
+                                dmg = 25;
+                            }
+                        }
+                        wo_tt->health -= dmg;
                         // wobject destroyed
                         if (wo_tt->health <= 0) {
                             for(i32 ind=0; ind<_mp.wall_count; ind++) {
@@ -406,19 +374,24 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
                     mod = true;
                     glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,0.5f,0.75f,1.0f);
                 }
+                iRect src = get_wobject_draw_rect(wobject->type);
                 if (wobject->type == WORLD_OBJECT_TYPE::WO_TREE) {
                     iRect tree_dest = {(i32)wobject->pos.x-64,(i32)wobject->pos.y-(64*3),3*64,4*64};
                     tree_dest.x += cam_mod.x;
                     tree_dest.y += cam_mod.y;
-                    GL_DrawTexture(gl_textures[TILE_TEXTURE],tree_dest,{0,64,48,64});
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],tree_dest,src);
                 } else if (wobject->type == WORLD_OBJECT_TYPE::WO_WOODEN_FENCE) {
                     iRect fence_dest = {(i32)wobject->pos.x,(i32)wobject->pos.y,64,64};
                     fence_dest.x+=cam_mod.x;
                     fence_dest.y+=cam_mod.y;
-                    GL_DrawTexture(gl_textures[TILE_TEXTURE],fence_dest,{48,96,32,32});
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],fence_dest,src);
                 } else if (wobject->type == WORLD_OBJECT_TYPE::WO_STONE) {
-                    iRect src = {48,48,32,32};
                     GL_DrawTexture(gl_textures[TILE_TEXTURE],{(i32)wobject->pos.x+cam_mod.x,(i32)wobject->pos.y+cam_mod.y,64,64},src);
+                } else if (wobject->type == WORLD_OBJECT_TYPE::WO_BEACON) {
+                    iRect beacon_dest = {(i32)wobject->pos.x-64,(i32)wobject->pos.y-(64*3),3*64,4*64};
+                    beacon_dest.x += cam_mod.x;
+                    beacon_dest.y += cam_mod.y;
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],beacon_dest,src);
                 }
                 if (mod) {
                     glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,1.0f,1.0f,1.0f);
@@ -457,6 +430,8 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         GL_DrawTextureEx(gl_textures[PLAYER_TEXTURE],dest_rect,src_rect,p.flip);
     }
 
+    glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
+
     for (i32 item_ind=0; item_ind<gs.world_item_count; item_ind++) {
         world_item_t *item = &gs.world_items[item_ind];
         iRect rect = {(i32)item->pos.x,(i32)item->pos.y,32,32};
@@ -466,7 +441,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         rect.y += (i32)item->z_pos;
         GL_DrawTexture(gl_textures[ITEM_TEXTURE],rect,get_item_rect(item->type));
     }
-    glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
+    //glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
     
     if (render_from_perspective_of != nullptr && client_sided_render_geometry.raycast_points.size()>0 && draw_shadows) {
         const SDL_Color black = {0,0,0,255};

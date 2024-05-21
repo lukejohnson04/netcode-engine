@@ -7,6 +7,7 @@ enum ITEM_TYPE : u8 {
     IT_WOODEN_FENCE,
 
     IT_WOODEN_PICKAXE,
+    IT_SHARPENED_STICK,
     
     IT_COUNT
 };
@@ -29,6 +30,8 @@ iRect get_item_rect(ITEM_TYPE type) {
         return {48,0,16,16};
     } else if (type == IT_WOODEN_PICKAXE) {
         return {16,32,16,16};
+    } else if (type == IT_SHARPENED_STICK) {
+        return {16,48,16,16};
     } else {
         return {0,0,0,0};
     }
@@ -110,3 +113,4 @@ struct inventory_manager_t {
 
 global_variable inventory_manager_t inventory_ui = {};
 
+// TODO: let player slingshot rocks
