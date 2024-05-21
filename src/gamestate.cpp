@@ -9,7 +9,6 @@ enum ROUND_STATE {
     ROUND_STATE_COUNT
 };
 
-
 struct world_object_t {
     v2 pos;
     WORLD_OBJECT_TYPE type;
@@ -41,7 +40,6 @@ struct generic_map_t {
     v2i walls[WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE];
 
     world_chunk_t chunks[WORLD_SIZE][WORLD_SIZE]={};
-    //TILE_TYPE tiles[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE] = {{TT_NONE}};
 
     void add_wall(v2i pos) {
         walls[wall_count++] = pos;
@@ -140,14 +138,25 @@ void load_new_game() {
     gs = {};
     _mp = {};
 
+    world_generation_props gen_props = generate_generation_props(Random::seed);
     perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
     constexpr i32 tiles_in_world = WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE;
 
-    double white_noise[tiles_in_world];
-    generate_white_noise(white_noise,tiles_in_world,Random::seed);
+    double tree_noise[tiles_in_world];
+    generate_white_noise(tree_noise,tiles_in_world,gen_props.seed_tree_noise);
     double height_noise[tiles_in_world];
-    generate_height_noisemap(height_noise,white_noise,WORLD_SIZE*CHUNK_SIZE,Random::seed);
-    
+    generate_height_noisemap(height_noise,WORLD_SIZE*CHUNK_SIZE,gen_props.seed_height_noise);
+    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    {
+        perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
+        for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
+            for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
+                stone_noise[x][y] = p_stone.noise(x,y);
+            }
+        }
+    }
+    i32 stone=0;
+
     for (i32 cy=0;cy<WORLD_SIZE;cy++) {
         for (i32 cx=0;cx<WORLD_SIZE;cx++) {
             world_chunk_t chunk = {};
@@ -157,14 +166,16 @@ void load_new_game() {
                     i32 global_x = cx*CHUNK_SIZE+x;
                     i32 global_y = cy*CHUNK_SIZE+y;
                     
-                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,white_noise,height_noise);
+                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
                     chunk.tiles[x][y] = tt;
-                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,white_noise,height_noise);
+                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
                     if (wo_tt != WO_NONE) {
+                        if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) stone++;
                         world_object_t n_obj = {};
                         n_obj.type = wo_tt;
                         n_obj.took_damage_tick=0;
                         n_obj.pos = {(float)global_x*64.f,(float)global_y*64.f};
+                        _mp.add_wall({global_x,global_y});
                         chunk.add_world_object(n_obj);
                     }
                 }
@@ -172,9 +183,11 @@ void load_new_game() {
             _mp.chunks[cx][cy] = chunk;
         }
     }
+    std::cout << "Generated " << stone << " stone\n";
 
     character &player = gs.players[gs.player_count];
     player = create_player({200,200},(entity_id)(gs.player_count));
+    add_to_inventory(player.inventory,character::INVENTORY_SIZE,{IT_WOODEN_FENCE,10});
     player.color = {(u8)(rand() % 255), (u8)(rand() % 255), (u8)(rand() % 255), 255};
     gs.player_count++;
 
@@ -224,7 +237,6 @@ void game_state::update(netstate_info_t &c, double delta) {
             world_chunk_t *chunk = &_mp.chunks[cx][cy];
             for (i32 obj_ind=0;obj_ind<chunk->world_object_count;obj_ind++) {
                 world_object_t *wo_tt = &chunk->world_objects[obj_ind];
-                if (wo_tt->type != WO_TREE) continue;
                 if (tick - wo_tt->took_damage_tick < 6) continue;
                 iRect tree_rect = {(i32)wo_tt->pos.x,(i32)wo_tt->pos.y,64,64};
                 for (i32 p_ind=0;p_ind<punching_players_count;p_ind++) {
@@ -234,11 +246,25 @@ void game_state::update(netstate_info_t &c, double delta) {
                     if (rects_collide(p_rect,tree_rect)) {
                         player->has_hit_something_yet=true;
                         wo_tt->took_damage_tick = tick;
+                        
                         wo_tt->health -= 15;
-                        // tree destroyed
+                        // wobject destroyed
                         if (wo_tt->health <= 0) {
-                            world_items[world_item_count++] = create_world_item(ITEM_TYPE::IT_WOOD,wo_tt->pos,player->flip?-1.0f:1.0f);
+                            for(i32 ind=0; ind<_mp.wall_count; ind++) {
+                                if (_mp.walls[ind] == v2i((i32)(wo_tt->pos.x/64),(i32)(wo_tt->pos.y/64))) {
+                                    _mp.walls[ind] = _mp.walls[--_mp.wall_count];
+                                    break;
+                                }
+                            }
+                            // drops
+                            if (wo_tt->type == WO_TREE) {
+                                world_items[world_item_count++] = create_world_item(ITEM_TYPE::IT_WOOD,wo_tt->pos + v2(player->flip ? -16 : 16, -16),player->flip?-1.0f:1.0f,3);
+                                world_items[world_item_count++] = create_world_item(ITEM_TYPE::IT_STICK,wo_tt->pos + v2(player->flip ? -16 : 16, -16),player->flip?-1.0f:1.0f,2);
+                            } else if (wo_tt->type == WO_STONE) {
+                                world_items[world_item_count++] = create_world_item(ITEM_TYPE::IT_STONE,wo_tt->pos + v2(player->flip ? -16 : 16, -16),player->flip?-1.0f:1.0f,3);
+                            }
                             chunk->world_objects[obj_ind] = chunk->world_objects[--chunk->world_object_count];
+                            
                             obj_ind--;
                         }
                         punching_players[p_ind] = punching_players[--punching_players_count];
@@ -269,9 +295,9 @@ void game_state::update(netstate_info_t &c, double delta) {
         item->pos += {item->vel.x,item->vel.y};
         item->z_pos += item->vel.z;
 
-        item->vel.x *= 0.85f;
-        item->vel.y *= 0.85f;
-        item->vel.z += 120.f*(1.0f/60.0f);
+        item->vel.x *= 0.9f;
+        item->vel.y *= 0.9f;
+        item->vel.z += 175.f*(1.0f/60.0f);
         
         if (item->z_pos >= 0) {
             item->z_pos = 0;
@@ -374,19 +400,26 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
             if (rects_collide(iRect({chunk_rect.x-192,chunk_rect.y-192,chunk_rect.w+384,chunk_rect.h+384}),cam_rect) == false) continue;
 
             for (i32 obj_ind=0;obj_ind<chunk.world_object_count;obj_ind++) {
-                world_object_t *tree = &chunk.world_objects[obj_ind];
-                if (tree->type != WORLD_OBJECT_TYPE::WO_TREE) {
-                    continue;
-                }
+                world_object_t *wobject = &chunk.world_objects[obj_ind];
                 bool mod=false;
-                if (gs.tick - tree->took_damage_tick < 12) {
+                if (gs.tick - wobject->took_damage_tick < 12) {
                     mod = true;
                     glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,0.5f,0.75f,1.0f);
                 }
-                iRect tree_dest = {(i32)tree->pos.x-64,(i32)tree->pos.y-(64*3),3*64,4*64};
-                tree_dest.x += cam_mod.x;
-                tree_dest.y += cam_mod.y;
-                GL_DrawTexture(gl_textures[TILE_TEXTURE],tree_dest,{0,64,48,64});
+                if (wobject->type == WORLD_OBJECT_TYPE::WO_TREE) {
+                    iRect tree_dest = {(i32)wobject->pos.x-64,(i32)wobject->pos.y-(64*3),3*64,4*64};
+                    tree_dest.x += cam_mod.x;
+                    tree_dest.y += cam_mod.y;
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],tree_dest,{0,64,48,64});
+                } else if (wobject->type == WORLD_OBJECT_TYPE::WO_WOODEN_FENCE) {
+                    iRect fence_dest = {(i32)wobject->pos.x,(i32)wobject->pos.y,64,64};
+                    fence_dest.x+=cam_mod.x;
+                    fence_dest.y+=cam_mod.y;
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],fence_dest,{48,96,32,32});
+                } else if (wobject->type == WORLD_OBJECT_TYPE::WO_STONE) {
+                    iRect src = {48,48,32,32};
+                    GL_DrawTexture(gl_textures[TILE_TEXTURE],{(i32)wobject->pos.x+cam_mod.x,(i32)wobject->pos.y+cam_mod.y,64,64},src);
+                }
                 if (mod) {
                     glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,1.0f,1.0f,1.0f);
                 }
@@ -431,7 +464,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         rect.x+=cam_mod.x;
         rect.y+=cam_mod.y;
         rect.y += (i32)item->z_pos;
-        GL_DrawTexture(gl_textures[ITEM_TEXTURE],rect,{32,0,16,16});
+        GL_DrawTexture(gl_textures[ITEM_TEXTURE],rect,get_item_rect(item->type));
     }
     glUniform4f(tintLoc_col, 1.0f,1.0f,1.0f,1.0f);
     
@@ -584,6 +617,17 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         GL_DrawTextureEx(gl_textures[TX_GAME_OBJECTS],{0,0,0,0},{0,0,0,0},false,true);
     }
 
+    if (render_from_perspective_of) {
+        if (render_from_perspective_of->inventory[inventory_ui.selected_slot].type == IT_WOODEN_FENCE) {
+            v2i mpos = get_mouse_position();
+            v2i selected_tile = mpos - cam_mod;
+            selected_tile = {(i32)selected_tile.x/64,(i32)selected_tile.y/64};
+            glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,1.0f,1.0f,0.5f);
+            GL_DrawTexture(gl_textures[TILE_TEXTURE],{selected_tile.x*64+cam_mod.x,selected_tile.y*64+cam_mod.y,64,64},{48,96,32,32});
+            glUniform4f(glGetUniformLocation(sh_textureProgram,"colorMod"),1.0f,1.0f,1.0f,1.0f);
+        }
+    }
+
     // minimap
     glUseProgram(sh_textureProgram);
     iRect minimap_dest = {1280-8-128,8,128,128};
@@ -657,3 +701,15 @@ internal void load_game_state_up_to_tick(void* temp_game_state_data, netstate_in
         gst.tick++;
     }
 }
+
+internal
+v2i get_selected_tile(v2i mpos,v2i cam_mod) {
+    v2i selected_tile = mpos - cam_mod;
+    selected_tile = {(i32)selected_tile.x/64,(i32)selected_tile.y/64};
+}
+
+internal
+v2i get_selected_tile(v2i cam_mod) {
+    return get_selected_tile(get_mouse_position(),cam_mod);
+}
+

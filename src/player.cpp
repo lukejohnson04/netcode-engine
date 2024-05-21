@@ -151,6 +151,13 @@ void player_take_damage(character *player, int dmg) {
     player->damage_timer=0.5;
 }
 
+
+fRect get_player_physics_hitbox(character *player) {
+    float r_width = 32, r_height = 32.f;
+    return {player->pos.x+32-(r_width/2),player->pos.y+64-r_height,r_width,r_height};
+}
+
+
 void update_player_controller(character *player, int tick, camera_t *game_camera=nullptr) {
     // 16 max commands a tick
     command_t new_commands[16];
@@ -271,14 +278,14 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     player->pos.x += player->vel.x * (float)delta;
     
     FOR(walls,wall_count) {
-        fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+        fRect p_hitbox = get_player_physics_hitbox(player);
         fRect wall_rect = {obj->x*64.f,obj->y*64.f,64.f,64.f};
         if (rects_collide(p_hitbox,wall_rect)) {
             // adjust
             if (player->vel.x > 0) {
-                player->pos.x = wall_rect.x - p_hitbox.w;
+                player->pos.x = wall_rect.x - p_hitbox.w - (p_hitbox.x-player->pos.x);
             } else {
-                player->pos.x = wall_rect.x + wall_rect.w;
+                player->pos.x = wall_rect.x + wall_rect.w - (p_hitbox.x-player->pos.x);
             }
             break;
         }
@@ -286,14 +293,14 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
     
     player->pos.y += player->vel.y * (float)delta;
     FOR(walls,wall_count) {
-        fRect p_hitbox = {player->pos.x,player->pos.y,64.f,64.f};
+        fRect p_hitbox = get_player_physics_hitbox(player);
         fRect wall_rect = {obj->x*64.f,obj->y*64.f,64.f,64.f};
         if (rects_collide(p_hitbox,wall_rect)) {
             // adjust
             if (player->vel.y > 0) {
-                player->pos.y = wall_rect.y - p_hitbox.h;
+                player->pos.y = wall_rect.y - p_hitbox.h - (p_hitbox.y-player->pos.y);
             } else {
-                player->pos.y = wall_rect.y + wall_rect.h;
+                player->pos.y = wall_rect.y + wall_rect.h - (p_hitbox.y-player->pos.y);
             }
             break;
         }

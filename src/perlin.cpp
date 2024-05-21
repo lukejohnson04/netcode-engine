@@ -21,13 +21,16 @@ void generate_white_noise(double *arr, int n, u32 seed) {
     }
 }
 
-void generate_height_noisemap(double *arr, double *white_noise, int map_size, u32 seed) {
+void generate_height_noisemap(double *arr, int map_size, u32 seed) {
+    std::mt19937 rand(seed);
+    std::uniform_real_distribution<double> distribution(0.0, 1.0);
+    
     for (i32 x=0;x<map_size;x++) {
         for (i32 y=0;y<map_size;y++) {
             v2d normalized_coords = {(double)x/(double)map_size,(double)y/(double)map_size};
             double dist = ddistance_between_points(normalized_coords,{0.5,0.5}) * 2.0;
             double val = -(pow(abs(0.85*dist),3)) + 1;
-            double white_val = white_noise[x*map_size+y];
+            double white_val = distribution(rand);
             val += (white_val-0.5) / 8.0;
             
             val = MAX(MIN(val,1.0),0.0);

@@ -54,6 +54,8 @@
 #define WINDOW_HEIGHT 720
 
 
+bool LISTEN_SERVER=false;
+
 
 SDL_Window *window = nullptr;
 SDL_Surface *screenSurface = nullptr;
@@ -202,11 +204,10 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
 #define MAX_CLIENTS 16
 
 #include "gamestate.cpp"
-//#include "gm_strike.cpp"
 #include "network.cpp"
 #include "server.cpp"
 #include "client.cpp"
-
+#include "client_sided_gameplay.cpp"
 
 static void GameGUIStart() {
     
@@ -243,7 +244,18 @@ static void GameGUIStart() {
 
     int connected_last_tick = client_st.gms.connected_players;
 
-    client_st.gms.state = GMS::PREGAME_SCREEN;
+    if (LISTEN_SERVER) {
+        client_st.gms.state = GMS::GAME_PLAYING;
+        client_st.gms.connected_players=1;
+        client_st.client_id = client_st.gms.connected_players-1;
+        client_st.sync_timer.Start();
+        
+        Random::Init();
+        load_new_game();
+        client_st.loaded_new_map=true;
+    } else {
+        client_st.gms.state = GMS::PREGAME_SCREEN;
+    }
 
     struct {
         generic_drawable health_text;
@@ -273,11 +285,13 @@ static void GameGUIStart() {
     }
 
     camera_t game_camera;
-
+    
     // WAY too big its like 8kb lol
     printf("gamestate size: %d\n",(i32)sizeof(game_state));
     printf("character size: %d\n",(i32)sizeof(character));
 
+    load_recipes();
+    
     while (running) {
         // input
         PollEvents(&input,&running);
@@ -324,8 +338,6 @@ static void GameGUIStart() {
             // snapshot for 95 instead of sending each client just the snapshot for 100
             
             // snapshots
-            //DWORD _merge_snapshots_wait = WaitForSingleObject(client_st._mt_merge_snapshots,0);
-            //if (_merge_snapshots_wait == WAIT_OBJECT_0) {
             {
                 if (client_st._new_merge_snapshot) {
                     client_st.NetState.snapshots.insert(client_st.NetState.snapshots.end(),client_st.merge_snapshots.begin(),client_st.merge_snapshots.end());
@@ -379,14 +391,23 @@ static void GameGUIStart() {
                     gs.update(client_st.NetState,tick_delta);
                     gs.tick++;
                 }
-                //ReleaseMutex(client_st._mt_map);
+
+                client_side_update(player,&game_camera);
+            }
+
+            for (i32 ind=0; ind<5;ind++) {
+                if (input.just_pressed[SDL_SCANCODE_1+ind]) {
+                    inventory_ui.selected_slot = ind;
+                }
             }
             
+            /*
             for (i32 ind=0; ind<6;ind++) {
                 if (input.just_pressed[SDL_SCANCODE_5+ind]) {
                     queue_sound((SfxType)((i32)SfxType::VO_FAVORABLE+ind),client_st.client_id,target_tick);
                 }
             }
+            */
 
             if (input.just_pressed[SDL_SCANCODE_MINUS]) {
                 queue_sound(SfxType::VO_IM_GOING_TO_KILL_THEM,client_st.client_id,target_tick);
@@ -616,12 +637,11 @@ static void GameGUIStart() {
 
             GLuint colUni = glGetUniformLocation(sh_textureProgram, "color");
 
-            local_persist i32 selected_slot=0;
             if (player) {
                 // draw inventory
                 for (i32 slot_ind=0;slot_ind<5;slot_ind++) {
                     iRect src = {0,0,16,16};
-                    if (slot_ind == selected_slot) {
+                    if (slot_ind == inventory_ui.selected_slot) {
                         src = {0,16,16,16};
                     }
                     iRect dest = {slot_ind*64+8,8,64,64};
@@ -630,6 +650,81 @@ static void GameGUIStart() {
                     {
                         iRect item_dest = {dest.x+8,dest.y+8,dest.w-16,dest.h-16};
                         GL_DrawTexture(gl_textures[ITEM_TEXTURE],item_dest,get_item_rect(player->inventory[slot_ind].type));
+                    }
+                }
+                
+                if (input.just_pressed[SDL_SCANCODE_B])
+                    inventory_ui.crafting_menu_open = !inventory_ui.crafting_menu_open;
+
+                i32 craftable_recipes=0;
+                if (inventory_ui.crafting_menu_open) {
+                    i32 width = 800;
+                    i32 height = 620;
+                    iRect dest = {1280/2 - width/2, 720/2 - height/2 + 40,width,height};
+                    GL_DrawTexture(gl_textures[BUY_MENU_TEXTURE],dest);
+                    // display recipes
+                    for (i32 recipe_ind=0;recipe_ind<recipe_count;recipe_ind++) {
+                        recipe_t recipe = recipes[recipe_ind];
+
+                        i32 input_count=0;
+                        inventory_item_t *inputs[recipe_t::MAX_RECIPE_INGREDIENTS];
+
+                        for (inventory_item_t *req=recipe.input; req<recipe.input+recipe_t::MAX_RECIPE_INGREDIENTS; req++) {
+                            if (req->type == IT_NONE) {
+                                break;
+                            }
+                            bool have_item=false;
+                            for (inventory_item_t *item=player->inventory; item<player->inventory+character::INVENTORY_SIZE; item++) {
+                                if (item->type == req->type) {
+                                    if (item->count >= req->count) {
+                                        inputs[input_count++] = item;
+                                        have_item = true;
+                                        break;
+                                    } else {
+                                        goto recipe_not_craftable;
+                                    }
+                                }
+                            }
+                            if (!have_item) goto recipe_not_craftable;
+                        }
+                        {
+                            v2i recipe_startpos = {dest.x + 48, dest.y+48+craftable_recipes*160};
+                            iRect equals_rect = {recipe_startpos.x + input_count * 160, recipe_startpos.y+32, 64,64};
+                            iRect result_rect = {equals_rect.x + 80, recipe_startpos.y, 128,128};
+
+                            if (input.mouse_just_pressed) {
+                                v2i mpos = get_mouse_position();
+                                if (rect_contains_point(result_rect,mpos)) {
+                                    // craft the recipe
+                                    for (inventory_item_t *req=recipe.input; req<recipe.input+recipe_t::MAX_RECIPE_INGREDIENTS; req++) {
+                                        for (i32 input_ind=0;input_ind<input_count;input_ind++) {
+                                            inventory_item_t *input_item = inputs[input_ind];
+                                            if (req->type == input_item->type) {
+                                                input_item->count -= req->count;
+                                                if (input_item->count == 0)
+                                                    input_item->type = IT_NONE;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    add_to_inventory(player->inventory,character::INVENTORY_SIZE,recipe.output);
+                                    goto recipe_not_craftable;
+                                }
+                            }
+
+                            for (i32 input_ind=0;input_ind<input_count;input_ind++) {
+                                inventory_item_t *input_item = inputs[input_ind];
+                                iRect item_dest = {recipe_startpos.x + input_ind*160,recipe_startpos.y,128,128};
+                                GL_DrawTexture(gl_textures[ITEM_TEXTURE],item_dest,get_item_rect(input_item->type));
+                            }
+                            GL_DrawTexture(gl_textures[UI_TEXTURE],equals_rect,{48,0,16,16});
+                            GL_DrawTexture(gl_textures[ITEM_TEXTURE],result_rect,get_item_rect(recipe.output.type));
+                            craftable_recipes++;
+                            continue;
+                        }
+                        
+                recipe_not_craftable:
+                        continue;
                     }
                 }
             }
@@ -757,7 +852,7 @@ static void GameGUIStart() {
                     GL_DrawRect({p1.x,p1.y,p2.x-p1.x,p2.y-p1.y+2},col);
                     // TODO: draw these lines!! important!!
                     /*SDL_RenderDrawLine(sdl_renderer,p1.x,p1.y,p2.x,p2.y);
-                    SDL_RenderDrawLine(sdl_renderer,p1.x+1,p1.y,p2.x+1,p2.y);
+                      SDL_RenderDrawLine(sdl_renderer,p1.x+1,p1.y,p2.x+1,p2.y);
                     */
                 }
 
@@ -804,10 +899,6 @@ static void GameGUIStart() {
 
             render_pregame_screen(client_st.gms,time_to_start);
             // render player color selector
-            /*SDL_Rect p_rect = {0,0,32,32};
-            SDL_Rect dest_rect = {200,500,64,64};
-            SDL_RenderCopy(sdl_renderer,textures[TexType::PLAYER_TEXTURE],&p_rect,&dest_rect);
-            */
         }
 
 endof_frame:
@@ -949,25 +1040,41 @@ static void demo() {
 
     Random::Init();
 
+    world_generation_props world_gen_props = generate_generation_props(Random::seed);
+
     perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
-    double white_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
-    generate_white_noise(&white_noise[0][0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,Random::seed);
+    double tree_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    generate_white_noise(tree_noise[0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,world_gen_props.seed_tree_noise);
+    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
+    for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
+        for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
+            stone_noise[x][y] = p_stone.noise(x,y);
+        }
+    }
 
-    GLuint gl_perlin_tex=NULL, gl_white_tex=NULL;
-    p_noise.generate_texture(&gl_perlin_tex);
-    generate_texture_from_white_noise(&gl_white_tex,&white_noise[0][0],WORLD_SIZE*CHUNK_SIZE);
-
+    GLuint gl_perlin_tex=NULL, gl_tree_noise_tex=NULL;
+    p_stone.generate_texture(&gl_perlin_tex);
+    generate_texture_from_white_noise(&gl_tree_noise_tex,tree_noise[0],WORLD_SIZE*CHUNK_SIZE);
 
     double height_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
-    generate_height_noisemap(height_noise[0],white_noise[0],WORLD_SIZE*CHUNK_SIZE,Random::seed);
+    // seed doesn't matter here
+    generate_height_noisemap(height_noise[0],WORLD_SIZE*CHUNK_SIZE,world_gen_props.seed_height_noise);
     
     SDL_Surface *height_surf = generate_surface_from_height_noisemap(height_noise[0],WORLD_SIZE*CHUNK_SIZE);
     GLuint gl_height_tex;
     glGenTextures(1,&gl_height_tex);
     GL_load_texture_from_surface(gl_height_tex,height_surf);
     SDL_FreeSurface(height_surf);
-    
+
+    i32 map_size_pixels_total = p_noise.map_size * p_noise.chunk_size * 16;
+
     bool shadow_demo=true;
+    GLuint gl_real_tex;
+    glGenTextures(1,&gl_real_tex);
+    GL_load_texture_for_framebuffer(gl_real_tex,map_size_pixels_total,map_size_pixels_total);
+    GLuint gl_real_fb = GL_create_framebuffer(gl_real_tex);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
 
     while (running) {
         // input
@@ -1149,10 +1256,15 @@ static void demo() {
 
             local_persist bool draw_tile_grid=false;
             local_persist bool draw_chunk_grid=true;
-            local_persist enum {VIEW_PERLIN, VIEW_WHITE, VIEW_HEIGHT, VIEW_WORLD} raw_view=VIEW_PERLIN;
+            enum {VIEW_PERLIN, VIEW_WHITE, VIEW_HEIGHT, VIEW_WORLD, VIEW_TILES, VIEW_MATERIAL, VIEW_MATERIAL_TREE, VIEW_MATERIAL_STONE, VIEW_COUNT};
+            local_persist u8 raw_view=VIEW_PERLIN;
+            local_persist bool up_to_date=false;
 
             if (input.just_pressed[SDL_SCANCODE_E]) {
-                raw_view = (raw_view==VIEW_PERLIN?VIEW_WHITE:raw_view==VIEW_WHITE?VIEW_HEIGHT:raw_view==VIEW_HEIGHT?VIEW_WORLD:VIEW_PERLIN);
+                raw_view = raw_view++;
+                if (raw_view >= VIEW_COUNT)
+                    raw_view=0;
+                up_to_date=false;
             }
             if (input.just_pressed[SDL_SCANCODE_R]) {
                 draw_tile_grid = !draw_tile_grid;
@@ -1173,56 +1285,55 @@ static void demo() {
             } else if (raw_view == VIEW_HEIGHT) {
                 GL_DrawTexture(gl_height_tex,dest);
             } else if (raw_view == VIEW_WHITE) {
-                GL_DrawTexture(gl_white_tex,dest);
-            } else if (raw_view == VIEW_WORLD) {
-                i32 map_size_pixels_total = p_noise.map_size * p_noise.chunk_size * 16;
+                GL_DrawTexture(gl_tree_noise_tex,dest);
+            } else if (raw_view == VIEW_WORLD || raw_view == VIEW_TILES || raw_view == VIEW_MATERIAL || raw_view == VIEW_MATERIAL_STONE || raw_view == VIEW_MATERIAL_TREE) {
                 glm::mat4 larger_projection = glm::ortho(0.0f, static_cast<float>(map_size_pixels_total), static_cast<float>(map_size_pixels_total), 0.0f, -1.0f, 1.0f);
                 GLuint projLoc = glGetUniformLocation(sh_textureProgram, "projection");
 
-                local_persist GLuint gl_real_tex=NULL;
-                local_persist bool up_to_date=false;
                 glUseProgram(sh_textureProgram);
                 if(!up_to_date){
-                    if (gl_real_tex != NULL) {
-                        glDeleteTextures(1,&gl_real_tex);
-                    } if (gl_real_tex == NULL) {
-                        glGenTextures(1,&gl_real_tex);
-                    }
-                    GL_load_texture_for_framebuffer(gl_real_tex,map_size_pixels_total,map_size_pixels_total);
-                    GLuint gl_real_fb = GL_create_framebuffer(gl_real_tex);
-
                     glBindFramebuffer(GL_FRAMEBUFFER,gl_real_fb);
-                    glClearColor(0.0f,1.0f,1.0f,1.0f);
-                    local_persist SDL_Surface *p_surf = p_noise.generate_surface();
+                    glClearColor(0.0f,0.164f,1.0f,1.0f);
+                    glClear(GL_COLOR_BUFFER_BIT);
                     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(larger_projection));
-                    glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);                    
+                    glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);
 
-                    glUseProgram(sh_textureProgram);
                     for (i32 x=0;x<p_noise.map_size*p_noise.chunk_size;x++) {
                         for (i32 y=0;y<p_noise.map_size*p_noise.chunk_size;y++) {
-                            iRect src={0,0,16,16};
-                            TILE_TYPE tt=determine_tile(x,y,p_noise,white_noise[0],height_noise[0]);
-                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,p_noise,white_noise[0],height_noise[0]);
+                            iRect tile_src={0,0,16,16};
+                            iRect wobj_src={0,0,16,16};
+                            TILE_TYPE tt=determine_tile(x,y,p_noise,tree_noise[0],stone_noise[0],height_noise[0]);
+                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,p_noise,tree_noise[0],stone_noise[0],height_noise[0]);
 
                             if (wo_tt == WORLD_OBJECT_TYPE::WO_TREE) {
-                                src = {0,48,16,16};
-                            } else if (tt == TILE_TYPE::TT_WATER) {
-                                src = {32,0,16,16};
+                                wobj_src = {0,48,16,16};
+                            } else if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) {
+                                wobj_src = {0,32,16,16};
+                            }
+
+                            if (tt == TILE_TYPE::TT_WATER) {
+                                tile_src = {32,0,16,16};
                             } else if (tt == TILE_TYPE::TT_DIRT) {
-                                src = {16,32,16,16};
+                                tile_src = {16,32,16,16};
                             } else if (tt == TILE_TYPE::TT_STONE) {
-                                src = {0,32,16,16};
+                                tile_src = {0,32,16,16};
                             } else if (tt == TILE_TYPE::TT_GRASS) {
-                                src = {0,16,16,16};
+                                tile_src = {0,16,16,16};
                             } else if (tt == TILE_TYPE::TT_SAND) {
-                                src = {16,16,16,16};
+                                tile_src = {16,16,16,16};
                             }
                             iRect tt_dest = {x*16,y*16,16,16};
 
-                            GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,src);
+                            if (raw_view == VIEW_WORLD || raw_view == VIEW_TILES) {
+                                GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,tile_src);
+                            } if (wo_tt != WO_NONE) {
+                                if (raw_view == VIEW_WORLD || raw_view == VIEW_MATERIAL || ((wo_tt == WO_TREE && raw_view == VIEW_MATERIAL_TREE) || (wo_tt == WO_STONE && raw_view == VIEW_MATERIAL_STONE))) {
+                                    GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,wobj_src);
+                                    if (wo_tt) std::cout << "Drawing trees\n";
+                                }
+                            }
                         }
                     }
-                    glDeleteFramebuffers(1,&gl_real_fb);
                     glBindFramebuffer(GL_FRAMEBUFFER,0);
                     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
 
@@ -1277,6 +1388,9 @@ int main(int argc, char *argv[]) {
     } else if (argc > 1 && !strcmp(argv[1],"demo")) {
         // demo
         demo();
+    } else if (argc > 1 && !strcmp(argv[1],"listenserver")) {
+        LISTEN_SERVER=true;
+        GameGUIStart();
     } else {
         if (argc > 1) {
             int port = DEFAULT_PORT;

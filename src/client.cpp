@@ -30,13 +30,6 @@ struct client_t {
         return ticks_elapsed;
     }
 
-    double get_time_to_next_tick() {
-        int next_tick = get_exact_current_server_tick()+1;
-        LARGE_INTEGER next_tick_time;
-        next_tick_time.QuadPart = gms.game_start_time.QuadPart + (next_tick*sync_timer.frequency.QuadPart/60);
-        return static_cast<double>(next_tick_time.QuadPart-sync_timer.get_high_res_elapsed().QuadPart)/sync_timer.frequency.QuadPart;
-    }
-
     std::string username="";
 
     bool loaded_new_map=false;
@@ -155,11 +148,6 @@ DWORD WINAPI ClientListen(LPVOID lpParamater) {
 
 static void GameGUIStart();
 static void client_connect(int port,std::string ip_addr) {
-    if( SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-        printf( "SDL could not initialize! SDL Error: %s\r\n", SDL_GetError() );
-        return;
-    }
-
     int connect_socket = (int)socket(AF_INET, SOCK_DGRAM, 0);
     if (connect_socket < 0) {
         printf("socket creation failed\n");
