@@ -54,14 +54,14 @@
 #define WINDOW_HEIGHT 720
 
 
-bool LISTEN_SERVER=false;
+global_variable bool LISTEN_SERVER=false;
 
 
-SDL_Window *window = nullptr;
-SDL_Surface *screenSurface = nullptr;
-SDL_Renderer *sdl_renderer=nullptr;
-SDL_GLContext glContext;
-glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(WINDOW_WIDTH), static_cast<float>(WINDOW_HEIGHT), 0.0f, -1.0f, 1.0f);
+global_variable SDL_Window *window = nullptr;
+global_variable SDL_Surface *screenSurface = nullptr;
+global_variable SDL_Renderer *sdl_renderer=nullptr;
+global_variable SDL_GLContext glContext;
+global_variable glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(WINDOW_WIDTH), static_cast<float>(WINDOW_HEIGHT), 0.0f, -1.0f, 1.0f);
 
 void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true) {
 #ifdef PROFILE_BUILD
@@ -163,9 +163,6 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
     SDL_GL_SetSwapInterval(vsync ? 1 : 0);
     screenSurface = SDL_GetWindowSurface(window);
 }
-
-//#define MAX_MAP_SIZE 64
-
 
 #include "render.cpp"
 #include "audio.cpp"
@@ -518,8 +515,8 @@ static void GameGUIStart() {
                     auto &rps = client_sided_render_geometry.raycast_points;
                     rps.clear();
                     client_sided_render_geometry.segments.clear();
-                    for (i32 n=0; n<_mp.wall_count; n++) {
-                        v2i wall=_mp.walls[n];
+                    for (i32 n=0; n<_mp->wall_count; n++) {
+                        v2i wall=_mp->walls[n];
                         rps.push_back(v2(wall.x,wall.y)*64);
                         rps.push_back(v2(wall.x+1,wall.y)*64);
                         rps.push_back(v2(wall.x,wall.y+1)*64);
@@ -554,9 +551,9 @@ static void GameGUIStart() {
                         }
                     
                     }
-                
-                    for (i32 ind=0; ind<_mp.wall_count; ind++) {
-                        v2 wall=_mp.walls[ind];
+                    
+                    for (i32 ind=0; ind<_mp->wall_count; ind++) {
+                        v2 wall=_mp->walls[ind];
                         v2 p1 = v2(wall.x,wall.y)*64;
                         v2 p2 = v2(wall.x+1,wall.y)*64;
                         v2 p3 = v2(wall.x,wall.y+1)*64;
@@ -956,9 +953,6 @@ static void demo() {
         std::cerr << "Error! Framebuffer is not complete!" << std::endl;
     }
 
-    // temporarily flip the projection for the framebuffer since their y axis is flipped automatically 
-
-
     glUseProgram(sh_colorProgram);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -997,29 +991,10 @@ static void demo() {
         std::cerr << "OpenGL Error: " << err << std::endl;
     }
 
-    /*
-    int w, h;
-    int miplevel = 0;
-    glBindTexture(GL_TEXTURE_2D,text_tex);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, miplevel, GL_TEXTURE_WIDTH, &w);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, miplevel, GL_TEXTURE_HEIGHT, &h);
-    //std::cout << std::endl << temp_->w << ", " << temp_surf->h << std::endl;
-    std::cout << w << ", " << h << std::endl;
-    glBindTexture(GL_TEXTURE_2D,0);
-    */
-
     GLuint test_mask_texture,test_world_texture;
     glGenTextures(1,&test_mask_texture);
     glGenTextures(1,&test_world_texture);
     GL_load_texture(test_mask_texture,"res/test_mask.png");
-
-    /*
-    glBindTexture(GL_TEXTURE_2D,test_world_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D,0);
-    */
     GLuint test_shadow_texture,test_objects_texture;
     glGenTextures(1,&test_shadow_texture);
     glGenTextures(1,&test_objects_texture);
@@ -1030,44 +1005,41 @@ static void demo() {
     GLuint test_fb=GL_create_framebuffer(test_world_texture);
     GLuint shadow_fb=GL_create_framebuffer(test_shadow_texture);
     GLuint objects_fb=GL_create_framebuffer(test_objects_texture);
-    /*
-    glGenFramebuffers(1,&test_fb);
-    glBindFramebuffer(GL_FRAMEBUFFER,test_fb);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, test_world_texture, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER,0);
-    */
-
 
     Random::Init();
+    //world_generation_props *gen_props = (world_generation_props*)malloc(sizeof(world_generation_props));
+    //generate_generation_props(gen_props,Random::seed);
+    world_generation_props *gen_props = (world_generation_props*)malloc(sizeof(world_generation_props));
+    generic_map_t *map = (generic_map_t*)malloc(sizeof(generic_map_t));
+    generate_world(map,gen_props);
+    // doesn't really matter since this is demo but ought to free it anyways
+    free(map);
+    
 
-    world_generation_props world_gen_props = generate_generation_props(Random::seed);
-
-    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
-    double tree_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
-    generate_white_noise(tree_noise[0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,world_gen_props.seed_tree_noise);
-    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    perlin p_terrain = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
+    generate_white_noise(gen_props->tree_noise[0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,gen_props->seed_tree_noise);
     perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
     for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
         for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
-            stone_noise[x][y] = p_stone.noise(x,y);
+            gen_props->terrain_noise[x][y] = p_terrain.noise(x,y);
+            gen_props->stone_noise[x][y] = p_stone.noise(x,y);
         }
     }
 
     GLuint gl_perlin_tex=NULL, gl_tree_noise_tex=NULL;
     p_stone.generate_texture(&gl_perlin_tex);
-    generate_texture_from_white_noise(&gl_tree_noise_tex,tree_noise[0],WORLD_SIZE*CHUNK_SIZE);
+    generate_texture_from_white_noise(&gl_tree_noise_tex,gen_props->tree_noise[0],WORLD_SIZE*CHUNK_SIZE);
 
-    double height_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
     // seed doesn't matter here
-    generate_height_noisemap(height_noise[0],WORLD_SIZE*CHUNK_SIZE,world_gen_props.seed_height_noise);
+    generate_height_noisemap(gen_props->height_noise[0],WORLD_SIZE*CHUNK_SIZE,gen_props->seed_height_noise);
     
-    SDL_Surface *height_surf = generate_surface_from_height_noisemap(height_noise[0],WORLD_SIZE*CHUNK_SIZE);
+    SDL_Surface *height_surf = generate_surface_from_height_noisemap(gen_props->height_noise[0],WORLD_SIZE*CHUNK_SIZE);
     GLuint gl_height_tex;
     glGenTextures(1,&gl_height_tex);
     GL_load_texture_from_surface(gl_height_tex,height_surf);
     SDL_FreeSurface(height_surf);
 
-    i32 map_size_pixels_total = p_noise.map_size * p_noise.chunk_size * 16;
+    i32 map_size_pixels_total = p_terrain.map_size * p_terrain.chunk_size * 16;
 
     bool shadow_demo=true;
     GLuint gl_real_tex;
@@ -1276,9 +1248,9 @@ static void demo() {
             zoom = clamp(0.125f,16.0f,zoom);
             glUseProgram(sh_textureProgram);
             iRect dest = {map_pos.x,map_pos.y,(i32)(256*zoom),(i32)(256*zoom)};
-            i32 relative_tile_size = dest.w/(p_noise.chunk_size*p_noise.map_size);
-            i32 relative_chunk_size = relative_tile_size * p_noise.chunk_size;
-            i32 relative_map_size = relative_chunk_size * p_noise.map_size;
+            i32 relative_tile_size = dest.w/(p_terrain.chunk_size*p_terrain.map_size);
+            i32 relative_chunk_size = relative_tile_size * p_terrain.chunk_size;
+            i32 relative_map_size = relative_chunk_size * p_terrain.map_size;
 
             if (raw_view == VIEW_PERLIN) {
                 GL_DrawTexture(gl_perlin_tex,dest);
@@ -1298,13 +1270,13 @@ static void demo() {
                     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(larger_projection));
                     glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);
 
-                    for (i32 x=0;x<p_noise.map_size*p_noise.chunk_size;x++) {
-                        for (i32 y=0;y<p_noise.map_size*p_noise.chunk_size;y++) {
+                    for (i32 x=0;x<p_terrain.map_size*p_terrain.chunk_size;x++) {
+                        for (i32 y=0;y<p_terrain.map_size*p_terrain.chunk_size;y++) {
                             iRect tile_src={0,0,16,16};
                             iRect wobj_src={0,0,16,16};
-                            TILE_TYPE tt=determine_tile(x,y,p_noise,tree_noise[0],stone_noise[0],height_noise[0]);
-                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,p_noise,tree_noise[0],stone_noise[0],height_noise[0]);
-
+                            TILE_TYPE tt=determine_tile(x,y,gen_props);
+                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,gen_props);
+                             
                             if (wo_tt == WORLD_OBJECT_TYPE::WO_TREE) {
                                 wobj_src = {0,48,16,16};
                             } else if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) {
@@ -1343,18 +1315,18 @@ static void demo() {
                 GL_DrawTextureEx(gl_real_tex,dest,{0,0,0,0},false,true);
             }
             if (draw_tile_grid) {
-                for (i32 x=0; x<p_noise.chunk_size*p_noise.map_size+1; x++) {
+                for (i32 x=0; x<p_terrain.chunk_size*p_terrain.map_size+1; x++) {
                     GL_DrawLine({dest.x+x*relative_tile_size,dest.y},{dest.x+x*relative_tile_size,dest.y+dest.h});
                 }
-                for (i32 y=0; y<p_noise.chunk_size*p_noise.map_size+1; y++) {
+                for (i32 y=0; y<p_terrain.chunk_size*p_terrain.map_size+1; y++) {
                     GL_DrawLine({dest.x,dest.y+y*relative_tile_size},{dest.x+dest.w,dest.y+y*relative_tile_size});
                 }
             }
             if (draw_chunk_grid) {
-                for (i32 x=0; x<p_noise.map_size+1; x++) {
+                for (i32 x=0; x<p_terrain.map_size+1; x++) {
                     GL_DrawLine({dest.x+x*relative_chunk_size,dest.y},{dest.x+x*relative_chunk_size,dest.y+dest.h},COLOR_BLUE);
                 }
-                for (i32 y=0; y<p_noise.map_size+1; y++) {
+                for (i32 y=0; y<p_terrain.map_size+1; y++) {
                     GL_DrawLine({dest.x,dest.y+y*relative_chunk_size},{dest.x+dest.w,dest.y+y*relative_chunk_size},COLOR_BLUE);
                 }
             }

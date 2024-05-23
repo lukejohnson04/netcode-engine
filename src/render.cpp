@@ -49,13 +49,13 @@ enum FrameBufferType {
 };
 
 
-GLuint sh_textureProgram, sh_colorProgram, sh_modProgram;
-TTF_Font *m5x7=nullptr;
+global_variable GLuint sh_textureProgram, sh_colorProgram, sh_modProgram;
+global_variable TTF_Font *m5x7=nullptr;
 
-GLuint gl_textures[TEXTURE_COUNT] = {NULL};
-GLuint gl_varrays[VAO_COUNT] = {NULL};
-GLuint gl_vbuffers[VBO_COUNT] = {NULL};
-GLuint gl_framebuffers[FB_COUNT] = {NULL};
+global_variable GLuint gl_textures[TEXTURE_COUNT] = {NULL};
+global_variable GLuint gl_varrays[VAO_COUNT] = {NULL};
+global_variable GLuint gl_vbuffers[VBO_COUNT] = {NULL};
+global_variable GLuint gl_framebuffers[FB_COUNT] = {NULL};
 
 std::string readShaderFile(const std::string &shaderPath) {
     std::ifstream shaderFile;

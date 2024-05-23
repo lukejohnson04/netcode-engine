@@ -31,14 +31,7 @@ enum SfxType {
     SFX_COUNT
 };
 
-Mix_Chunk *sound_effects[SFX_COUNT] = {nullptr};
-
-struct singleton_sound_state {
-    static const i32 channel_count=8;
-    bool pool[channel_count]={false};
-};
-
-global_variable singleton_sound_state sound_state;
+global_variable Mix_Chunk *sound_effects[SFX_COUNT] = {nullptr};
 
 struct sound_event {
     SfxType type;
@@ -91,14 +84,6 @@ static void init_sfx() {
     }
 }
 
-static void fire_forget_sfx(SfxType type) {
-    for (i32 ind=0;ind<sound_state.channel_count;ind++) {
-        if (sound_state.pool[ind]==false) {
-            Mix_PlayChannel(ind, sound_effects[type], 0);
-            sound_state.pool[ind]=true;
-        }
-    }
-}
 
 internal void play_sfx(SfxType type) {
     Mix_PlayChannel( -1, sound_effects[type], 0 );

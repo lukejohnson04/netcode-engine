@@ -17,13 +17,13 @@ struct chatlog_t {
     i32 tick_added[MAX_CHAT_ENTRIES];
 };
 
-chatlog_t chatlog;
 
 struct chatlog_display_t {
     generic_drawable sprites[MAX_CHAT_ENTRIES]={};
 };
 
-chatlog_display_t chatlog_display={};
+global_variable chatlog_t chatlog;
+global_variable chatlog_display_t chatlog_display={};
 
 void add_to_chatlog(std::string sender_name,std::string message,i32 tick,chatlog_display_t *disp=nullptr) {
     std::string fin_str = sender_name + ": " + message;

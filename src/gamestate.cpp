@@ -92,68 +92,23 @@ global_variable void* transient_game_state;
 global_variable void* permanent_game_state;
 
 global_variable game_state gs;
-global_variable generic_map_t _mp;
+global_variable generic_map_t *_mp=nullptr;
 
 void load_new_game() {
     
     gs = {};
-    generate_world(&_mp);
-    /*
-
-    world_generation_props gen_props = generate_generation_props(Random::seed);
-    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
-    constexpr i32 tiles_in_world = WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE;
-
-    double tree_noise[tiles_in_world];
-    generate_white_noise(tree_noise,tiles_in_world,gen_props.seed_tree_noise);
-    double height_noise[tiles_in_world];
-    generate_height_noisemap(height_noise,WORLD_SIZE*CHUNK_SIZE,gen_props.seed_height_noise);
-    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
-    {
-        perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
-        for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
-            for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
-                stone_noise[x][y] = p_stone.noise(x,y);
-            }
-        }
+    world_generation_props *gen_props = (world_generation_props*)malloc(sizeof(world_generation_props));
+    if (_mp==nullptr) {
+        _mp = (generic_map_t*)malloc(sizeof(generic_map_t));
     }
-    i32 stone=0;
+    generate_world(_mp,gen_props);
+    free(gen_props);
 
-    for (i32 cy=0;cy<WORLD_SIZE;cy++) {
-        for (i32 cx=0;cx<WORLD_SIZE;cx++) {
-            world_chunk_t chunk = {};
-
-            for (i32 y=0;y<CHUNK_SIZE;y++) {
-                for (i32 x=0;x<CHUNK_SIZE;x++) {
-                    i32 global_x = cx*CHUNK_SIZE+x;
-                    i32 global_y = cy*CHUNK_SIZE+y;
-                    
-                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
-                    chunk.tiles[x][y] = tt;
-                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
-                    if (wo_tt != WO_NONE) {
-                        if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) stone++;
-                        world_object_t n_obj = {};
-                        n_obj.type = wo_tt;
-                        n_obj.took_damage_tick=0;
-                        n_obj.pos = {(float)global_x*64.f,(float)global_y*64.f};
-                        _mp.add_wall({global_x,global_y});
-                        chunk.add_world_object(n_obj);
-                    }
-                }
-            }
-            _mp.chunks[cx][cy] = chunk;
-        }
-    }
-    std::cout << "Generated " << stone << " stone\n";
-    */
     character &player = gs.players[gs.player_count];
     player = create_player({200,200},(entity_id)(gs.player_count));
     add_to_inventory(player.inventory,character::INVENTORY_SIZE,{IT_WOODEN_FENCE,10});
     player.color = {(u8)(rand() % 255), (u8)(rand() % 255), (u8)(rand() % 255), 255};
-    gs.player_count++;
-
-    
+    gs.player_count++;    
 }
 
 
@@ -187,7 +142,7 @@ void game_state::update(netstate_info_t &c, double delta) {
     FOR(players,player_count) {
         if (obj->curr_state == character::DEAD) continue;
         bool planting_before_update = obj->curr_state == character::PLANTING;
-        update_player(obj,delta,_mp.wall_count,_mp.walls,player_count,players,tick);
+        update_player(obj,delta,_mp->wall_count,_mp->walls,player_count,players,tick);
         if (obj->curr_state == character::PUNCHING && obj->has_hit_something_yet==false) {
             punching_players[punching_players_count++] = obj;
         }
@@ -195,7 +150,7 @@ void game_state::update(netstate_info_t &c, double delta) {
 
     for (i32 cx=0;cx<WORLD_SIZE;cx++) {
         for (i32 cy=0;cy<WORLD_SIZE;cy++) {
-            world_chunk_t *chunk = &_mp.chunks[cx][cy];
+            world_chunk_t *chunk = &_mp->chunks[cx][cy];
             for (i32 obj_ind=0;obj_ind<chunk->world_object_count;obj_ind++) {
                 world_object_t *wo_tt = &chunk->world_objects[obj_ind];
                 if (tick - wo_tt->took_damage_tick < 6) continue;
@@ -218,9 +173,9 @@ void game_state::update(netstate_info_t &c, double delta) {
                         wo_tt->health -= dmg;
                         // wobject destroyed
                         if (wo_tt->health <= 0) {
-                            for(i32 ind=0; ind<_mp.wall_count; ind++) {
-                                if (_mp.walls[ind] == v2i((i32)(wo_tt->pos.x/64),(i32)(wo_tt->pos.y/64))) {
-                                    _mp.walls[ind] = _mp.walls[--_mp.wall_count];
+                            for(i32 ind=0; ind<_mp->wall_count; ind++) {
+                                if (_mp->walls[ind] == v2i((i32)(wo_tt->pos.x/64),(i32)(wo_tt->pos.y/64))) {
+                                    _mp->walls[ind] = _mp->walls[--_mp->wall_count];
                                     break;
                                 }
                             }
@@ -320,7 +275,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         for (i32 cx=0; cx<WORLD_SIZE; cx++) {
             // see if chunk is onscreen
             const i32 chunk_size_pixels = CHUNK_SIZE*64;
-            world_chunk_t chunk = _mp.chunks[cx][cy];
+            world_chunk_t chunk = _mp->chunks[cx][cy];
             iRect chunk_rect = {chunk_size_pixels*cx,chunk_size_pixels*cy,chunk_size_pixels,chunk_size_pixels};
             if (rects_collide(chunk_rect,cam_rect) == false) continue;
 
@@ -360,7 +315,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
         for (i32 cx=0; cx<WORLD_SIZE; cx++) {
             // see if chunk is onscreen
             const i32 chunk_size_pixels = CHUNK_SIZE*64;
-            world_chunk_t chunk = _mp.chunks[cx][cy];
+            world_chunk_t chunk = _mp->chunks[cx][cy];
             iRect chunk_rect = {chunk_size_pixels*cx,chunk_size_pixels*cy,chunk_size_pixels,chunk_size_pixels};
 
             // need to make the chunk size a little bigger because trees are massive and take up more

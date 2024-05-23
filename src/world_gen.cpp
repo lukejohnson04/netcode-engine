@@ -87,25 +87,29 @@ struct world_generation_props {
     u32 seed_height_noise;
     u32 seed_tree_noise;
     u32 seed_stone_noise;
+    u32 seed_placement;
+
+    double terrain_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    double tree_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    double height_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
 };
 
-world_generation_props generate_generation_props(u32 seed) {
-    world_generation_props props;
-    props.seed_terrain = seed;
-    props.seed_height_noise = seed+1;
-    props.seed_tree_noise = seed+2;
-    props.seed_stone_noise = seed+3;
-
-    return props;
+void generate_generation_props(world_generation_props *gen_props, u32 seed) {
+    gen_props->seed_terrain = seed;
+    gen_props->seed_height_noise = seed+1;
+    gen_props->seed_tree_noise = seed+2;
+    gen_props->seed_stone_noise = seed+3;
+    gen_props->seed_placement = seed+4;
 }
 
 
 inline internal
-TILE_TYPE determine_tile(i32 x, i32 y, perlin &p_noise, double *white_noise, double *stone_noise, double *height_noise=nullptr) {
-    double noise_val = MAX(MIN(p_noise.noise(x,y),1.0),-1.0);
+TILE_TYPE determine_tile(i32 x, i32 y, world_generation_props *gen_props) {
+    double noise_val = MAX(MIN(gen_props->terrain_noise[x][y],1.0),-1.0);
     double altitude = (noise_val+1.0)/2.0;
-    if (height_noise) {
-        altitude *= height_noise[x*p_noise.chunk_size*p_noise.map_size + y];
+    if (gen_props->height_noise) {
+        altitude *= gen_props->height_noise[x][y];
     }
     double tree_spawn_chance = pow(altitude*0.9,2)+0.1;
     iRect src={0,0,16,16};
@@ -117,7 +121,7 @@ TILE_TYPE determine_tile(i32 x, i32 y, perlin &p_noise, double *white_noise, dou
     } else if (altitude < 0.25) {
         tt = TILE_TYPE::TT_SAND;
     } else {
-        double stone_chance = (altitude + 0.35) * stone_noise[x*p_noise.chunk_size*p_noise.map_size+y];
+        double stone_chance = (altitude + 0.35) * gen_props->stone_noise[x][y];
         if (stone_chance >= 0.5) {
             tt = TILE_TYPE::TT_STONE;
             return tt;
@@ -134,19 +138,18 @@ TILE_TYPE determine_tile(i32 x, i32 y, perlin &p_noise, double *white_noise, dou
 }
 
 inline internal
-WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, perlin &p_noise, double *tree_noise, double *stone_noise, double *height_noise) {
-    double noise_val = MAX(MIN(p_noise.noise(x,y),1.0),-1.0);
+WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, world_generation_props *gen_props) {
+    double noise_val = MAX(MIN(gen_props->terrain_noise[x][y],1.0),-1.0);
     double altitude = (noise_val+1.0)/2.0;
-    if (height_noise) {
-        altitude *= height_noise[x*p_noise.chunk_size*p_noise.map_size + y];
-    }
+    altitude *= gen_props->height_noise[x][y];
+
     double tree_spawn_chance = pow(altitude,2)+0.1;
     iRect src={0,0,16,16};
 
     WORLD_OBJECT_TYPE wo_tt=WO_NONE;
 
     if (altitude >= 0.225) {
-        double stone_spawn_chance = stone_noise[x*p_noise.chunk_size*p_noise.map_size+y];
+        double stone_spawn_chance = gen_props->stone_noise[x][y];
         stone_spawn_chance *= (altitude+0.45);
         if (stone_spawn_chance >= 0.4) {
             wo_tt = WORLD_OBJECT_TYPE::WO_STONE;
@@ -155,8 +158,7 @@ WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, perlin &p_noise, double *
     }
     
     if (altitude >= 0.32) {
-        i32 ind = (x*p_noise.map_size*p_noise.chunk_size) + y;
-        double tree_roll = tree_noise[ind]/1.25;
+        double tree_roll = gen_props->tree_noise[x][y]/1.25;
         if (tree_roll > 1.0-tree_spawn_chance) {
             wo_tt = WORLD_OBJECT_TYPE::WO_TREE;
             return wo_tt;
@@ -166,27 +168,26 @@ WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, perlin &p_noise, double *
     return wo_tt;
 }
 
+
 internal
-void generate_world(generic_map_t *mp) {
+void generate_world(generic_map_t *mp, world_generation_props *gen_props) {
     timer_t perfCounter;
     perfCounter.Start();
-    
-    *mp = {};
 
-    world_generation_props gen_props = generate_generation_props(Random::seed);
-    perlin p_noise = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
+    *mp = {};
+    *gen_props = {};
+
+    generate_generation_props(gen_props,Random::seed);
+    perlin p_terrain = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
     constexpr i32 tiles_in_world = WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE;
 
-    double tree_noise[tiles_in_world];
-    generate_white_noise(tree_noise,tiles_in_world,gen_props.seed_tree_noise);
-    double height_noise[tiles_in_world];
-    generate_height_noisemap(height_noise,WORLD_SIZE*CHUNK_SIZE,gen_props.seed_height_noise);
-    double stone_noise[WORLD_SIZE*CHUNK_SIZE][WORLD_SIZE*CHUNK_SIZE];
+    generate_white_noise(gen_props->tree_noise[0],WORLD_SIZE*CHUNK_SIZE*WORLD_SIZE*CHUNK_SIZE,gen_props->seed_tree_noise);
+    generate_height_noisemap(gen_props->height_noise[0],WORLD_SIZE*CHUNK_SIZE,gen_props->seed_height_noise);
     {
         perlin p_stone = create_perlin(WORLD_SIZE,CHUNK_SIZE,4,0.65);
         for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
             for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
-                stone_noise[x][y] = p_stone.noise(x,y);
+                gen_props->stone_noise[x][y] = p_stone.noise(x,y);
             }
         }
     }
@@ -201,9 +202,9 @@ void generate_world(generic_map_t *mp) {
                     i32 global_x = cx*CHUNK_SIZE+x;
                     i32 global_y = cy*CHUNK_SIZE+y;
                     
-                    TILE_TYPE tt = determine_tile(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
+                    TILE_TYPE tt = determine_tile(global_x,global_y,gen_props);
                     chunk.tiles[x][y] = tt;
-                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,p_noise,tree_noise,stone_noise[0],height_noise);
+                    WORLD_OBJECT_TYPE wo_tt = determine_world_object(global_x,global_y,gen_props);
                     if (wo_tt != WO_NONE) {
                         if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) stone++;
                         world_object_t n_obj = {};
@@ -218,7 +219,33 @@ void generate_world(generic_map_t *mp) {
             mp->chunks[cx][cy] = chunk;
         }
     }
-    std::cout << "Generated " << stone << " stone\n";
+
+    /*
+    // this code FUCKING SUCKS!!!!
+    // beacon placement
+    i32 min_dist_to_edge = 3;
+    i32 max_dist_to_edge = 15;
+    i32 min_dist_to_center = 20;
+    
+    // TODO: find way to calculuate distance to edge of the map
+
+    // random spawn point
+    mt19937 beacon_spawner_engine(gen_props->seed_placement);
+    // can't spawn in the outter chunk
+    std::uniform_real_distribution<i32> distribution(CHUNK_SIZE,CHUNK_SIZE + (CHUNK_SIZE*(WORLD_SIZE-2)));
+    do {
+        i32 x = distribution(beacon_spawner_engine);
+        i32 y = distribution(beacon_spawner_engine);
+
+        // test point
+        v2i chunk(x/CHUNK_SIZE,y/CHUNK_SIZE);
+
+        TILE_TYPE tile = mp->chunks[chunk.x][chunk.y].tiles[x-(chunk.x*CHUNK_SIZE)][y-(chunk.y*CHUNK_SIZE)];
+        if (tile != TT_WATER) {
+            
+        }
+    } while ();
+    */
 
     double elapsed = perfCounter.get();
     std::cout << "World generation took " << elapsed << " seconds" << std::endl;

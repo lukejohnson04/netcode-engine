@@ -128,6 +128,7 @@ double perlin::noise(i32 x, i32 y) {
     return total;
 }
 
+
 SDL_Surface *perlin::generate_surface() {
     SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0,chunk_size*map_size,chunk_size*map_size,32,SDL_PIXELFORMAT_ARGB8888);
     for (i32 x=0;x<map_size*chunk_size;x++) {
@@ -151,7 +152,6 @@ void perlin::generate_texture(GLuint *texture) {
     GL_load_texture_from_surface(*texture,perlin_surface);
     SDL_FreeSurface(perlin_surface);
 }
-
 
 void generate_texture_from_white_noise(GLuint *texture,double *noise,int n) {
     if (*texture) {

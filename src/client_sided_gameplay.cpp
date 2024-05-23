@@ -22,9 +22,9 @@ void client_side_update(character *player, camera_t *camera) {
                 n_obj.took_damage_tick=0;
                 n_obj.pos = selected_tile*64.f;
                 
-                world_chunk_t *chunk = &_mp.chunks[selected_tile.x/CHUNK_SIZE][selected_tile.y/CHUNK_SIZE];
+                world_chunk_t *chunk = &_mp->chunks[selected_tile.x/CHUNK_SIZE][selected_tile.y/CHUNK_SIZE];
                 chunk->add_world_object(n_obj);
-                _mp.add_wall(selected_tile);
+                _mp->add_wall(selected_tile);
             }
         }
     }

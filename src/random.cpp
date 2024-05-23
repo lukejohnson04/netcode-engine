@@ -7,9 +7,9 @@ struct RandomState {
 
 
 namespace Random {
-    RandomState random_engine_state;
+    global_variable RandomState random_engine_state;
 
-    u32 seed = 0;
+    global_variable u32 seed = 0;
     
     internal
     void Init(u32 n_seed=0) {
