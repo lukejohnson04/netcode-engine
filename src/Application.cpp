@@ -103,7 +103,7 @@ void initialize_systems(const char* winstr, bool vsync, bool init_renderer=true)
                               SDL_WINDOWPOS_UNDEFINED,
                               1280,
                               720,
-                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+                              SDL_WINDOW_OPENGL);
 
     printf("Created window\n");
 
@@ -326,6 +326,7 @@ static void GameGUIStart() {
             update_player_controller(player,target_tick,&game_camera);
             
             bool update_health_display=false;
+            std::cout << *_mp->get_tile(player->pos) << std::endl;
 
             int o_num=target_tick;
             target_tick = client_st.get_exact_current_server_tick();
@@ -1012,8 +1013,6 @@ static void demo() {
     world_generation_props *gen_props = (world_generation_props*)malloc(sizeof(world_generation_props));
     generic_map_t *map = (generic_map_t*)malloc(sizeof(generic_map_t));
     generate_world(map,gen_props);
-    // doesn't really matter since this is demo but ought to free it anyways
-    free(map);
     
 
     perlin p_terrain = create_perlin(WORLD_SIZE,CHUNK_SIZE,3,0.65);
@@ -1209,19 +1208,19 @@ static void demo() {
             local_persist v2i map_pos={128,32};
             local_persist bool regenerate=false;
             
-            if (input.scrolled_up && zoom < 16.f) {
+            if ((input.scrolled_up || input.just_pressed[SDL_SCANCODE_Z]) && zoom < 16.f) {
                 zoom *= 2;
                 // adjust position of tile based on where the mouse is located
                 // (don't just zoom into the top left everytime)
                 v2i dist_to_top_left = map_pos - mpos;
                 map_pos += dist_to_top_left;
-            } else if (input.scrolled_down && zoom > 0.125f) {
+            } else if ((input.scrolled_down || input.just_pressed[SDL_SCANCODE_X]) && zoom > 0.125f) {
                 zoom /= 2;
                 v2i dist_to_top_left = map_pos - mpos;
                 map_pos += -dist_to_top_left/2;
             }
 
-            if (input.mouse_middle_pressed) {
+            if (input.mouse_middle_pressed || input.mouse_right_pressed) {
                 map_pos.x += input.mouse_move_x;
                 map_pos.y += input.mouse_move_y;
             }
@@ -1270,40 +1269,56 @@ static void demo() {
                     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(larger_projection));
                     glViewport(0, 0, map_size_pixels_total, map_size_pixels_total);
 
-                    for (i32 x=0;x<p_terrain.map_size*p_terrain.chunk_size;x++) {
-                        for (i32 y=0;y<p_terrain.map_size*p_terrain.chunk_size;y++) {
-                            iRect tile_src={0,0,16,16};
-                            iRect wobj_src={0,0,16,16};
-                            TILE_TYPE tt=determine_tile(x,y,gen_props);
-                            WORLD_OBJECT_TYPE wo_tt=determine_world_object(x,y,gen_props);
-                             
-                            if (wo_tt == WORLD_OBJECT_TYPE::WO_TREE) {
-                                wobj_src = {0,48,16,16};
-                            } else if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) {
-                                wobj_src = {0,32,16,16};
-                            }
-
-                            if (tt == TILE_TYPE::TT_WATER) {
-                                tile_src = {32,0,16,16};
-                            } else if (tt == TILE_TYPE::TT_DIRT) {
-                                tile_src = {16,32,16,16};
-                            } else if (tt == TILE_TYPE::TT_STONE) {
-                                tile_src = {0,32,16,16};
-                            } else if (tt == TILE_TYPE::TT_GRASS) {
-                                tile_src = {0,16,16,16};
-                            } else if (tt == TILE_TYPE::TT_SAND) {
-                                tile_src = {16,16,16,16};
-                            }
-                            iRect tt_dest = {x*16,y*16,16,16};
-
+                    for (i32 cx=0;cx<WORLD_SIZE;cx++) {
+                        for (i32 cy=0;cy<WORLD_SIZE;cy++) {
+                            world_chunk_t *chunk = &map->chunks[cx][cy];
                             if (raw_view == VIEW_WORLD || raw_view == VIEW_TILES) {
-                                GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,tile_src);
-                            } if (wo_tt != WO_NONE) {
-                                if (raw_view == VIEW_WORLD || raw_view == VIEW_MATERIAL || ((wo_tt == WO_TREE && raw_view == VIEW_MATERIAL_TREE) || (wo_tt == WO_STONE && raw_view == VIEW_MATERIAL_STONE))) {
-                                    GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,wobj_src);
-                                    if (wo_tt) std::cout << "Drawing trees\n";
+                                for (i32 x=0;x<p_terrain.chunk_size;x++) {
+                                    for (i32 y=0;y<p_terrain.chunk_size;y++) {
+                                        TILE_TYPE tt=chunk->tiles[x][y];
+                                        iRect tile_src = {0,0,16,16};
+                                        /*
+                                          if (wo_tt == WORLD_OBJECT_TYPE::WO_TREE) {
+                                          wobj_src = {0,48,16,16};
+                                          } else if (wo_tt == WORLD_OBJECT_TYPE::WO_STONE) {
+                                          wobj_src = {0,32,16,16};
+                                          }
+                                        */
+
+                                        if (tt == TILE_TYPE::TT_WATER) {
+                                            tile_src = {32,0,16,16};
+                                        } else if (tt == TILE_TYPE::TT_DIRT) {
+                                            tile_src = {16,32,16,16};
+                                        } else if (tt == TILE_TYPE::TT_STONE) {
+                                            tile_src = {0,32,16,16};
+                                        } else if (tt == TILE_TYPE::TT_GRASS) {
+                                            tile_src = {0,16,16,16};
+                                        } else if (tt == TILE_TYPE::TT_SAND) {
+                                            tile_src = {16,16,16,16};
+                                        }
+                                        iRect tt_dest = {cx*CHUNK_SIZE*16+x*16,cy*CHUNK_SIZE*16+y*16,16,16};
+
+                                        GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,tile_src);
+                                    } 
                                 }
-                            }
+                            } if (raw_view == VIEW_WORLD || raw_view == VIEW_MATERIAL) {
+                                for (i32 obj_num=0; obj_num<chunk->world_object_count; obj_num++) {
+                                    world_object_t *obj = &chunk->world_objects[obj_num];
+                                    WORLD_OBJECT_TYPE wo_tt = obj->type;
+                                    iRect wobj_src = get_wobject_draw_rect(wo_tt);
+                                    iRect tt_dest = {(i32)(obj->pos.x/64)*16,(i32)(obj->pos.y/64)*16,16,16*2};
+                                    
+                                    if (wo_tt == WO_BEACON) {
+                                        tt_dest = {(i32)(obj->pos.x/64)*16,(i32)((obj->pos.y/64)-3)*16,16*2,16*4};
+                                        std::cout << "Drawing beacon\n";
+                                    }
+                                    if (wo_tt != WO_NONE) {
+                                        if (raw_view == VIEW_WORLD || raw_view == VIEW_MATERIAL || ((wo_tt == WO_TREE && raw_view == VIEW_MATERIAL_TREE) || (wo_tt == WO_STONE && raw_view == VIEW_MATERIAL_STONE))) {
+                                            GL_DrawTexture(gl_textures[TILE_TEXTURE],tt_dest,wobj_src);
+                                        }
+                                    }
+                                }                            
+                            }                                    
                         }
                     }
                     glBindFramebuffer(GL_FRAMEBUFFER,0);

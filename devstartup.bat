@@ -1,6 +1,5 @@
 @echo off
-cd B:\dev\Prototypes\netcode\build
-B:
+cd build
 call "shell.bat"
 cd ..\misc
 call "emacs.bat"

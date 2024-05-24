@@ -108,6 +108,7 @@ void load_new_game() {
     player = create_player({200,200},(entity_id)(gs.player_count));
     add_to_inventory(player.inventory,character::INVENTORY_SIZE,{IT_WOODEN_FENCE,10});
     player.color = {(u8)(rand() % 255), (u8)(rand() % 255), (u8)(rand() % 255), 255};
+    player.pos = gl_beacon_pos+v2(64,64);
     gs.player_count++;    
 }
 
@@ -145,6 +146,12 @@ void game_state::update(netstate_info_t &c, double delta) {
         update_player(obj,delta,_mp->wall_count,_mp->walls,player_count,players,tick);
         if (obj->curr_state == character::PUNCHING && obj->has_hit_something_yet==false) {
             punching_players[punching_players_count++] = obj;
+        }
+        v2i p_tile = v2i((i32)(obj->pos.x/64),(i32)(obj->pos.y/64));
+        v2i p_chunk = v2i(p_tile.x / CHUNK_SIZE, p_tile.y / CHUNK_SIZE);
+        world_chunk_t *player_chunk = &_mp->chunks[p_chunk.x][p_chunk.y];
+        if (player_chunk->tiles[p_tile.x-(p_chunk.x*CHUNK_SIZE*64)][p_tile.y-(p_chunk.y*CHUNK_SIZE*64)] == TT_WATER) {
+            obj->health -= 1;
         }
     }
 
@@ -343,7 +350,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
                 } else if (wobject->type == WORLD_OBJECT_TYPE::WO_STONE) {
                     GL_DrawTexture(gl_textures[TILE_TEXTURE],{(i32)wobject->pos.x+cam_mod.x,(i32)wobject->pos.y+cam_mod.y,64,64},src);
                 } else if (wobject->type == WORLD_OBJECT_TYPE::WO_BEACON) {
-                    iRect beacon_dest = {(i32)wobject->pos.x-64,(i32)wobject->pos.y-(64*3),3*64,4*64};
+                    iRect beacon_dest = {(i32)wobject->pos.x,(i32)(wobject->pos.y-3*64),2*64,4*64};
                     beacon_dest.x += cam_mod.x;
                     beacon_dest.y += cam_mod.y;
                     GL_DrawTexture(gl_textures[TILE_TEXTURE],beacon_dest,src);
@@ -354,6 +361,7 @@ void render_game_state(character *render_from_perspective_of=nullptr, camera_t *
             }
         }
     }
+    std::cout << render_from_perspective_of->pos.x << " " << render_from_perspective_of->pos.y << std::endl;
     
     
     glBindFramebuffer(GL_FRAMEBUFFER,0);

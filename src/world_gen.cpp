@@ -65,6 +65,16 @@ struct generic_map_t {
     void add_wall(v2i pos) {
         walls[wall_count++] = pos;
     }
+
+    TILE_TYPE *get_tile(v2 pos) {
+        v2i tile_coord = v2i((i32)(pos.x/64),(i32)(pos.y/64));
+        v2i chunk_coord = v2i(tile_coord.x/CHUNK_SIZE,tile_coord.y/CHUNK_SIZE);
+        tile_coord.x -= (chunk_coord.x*CHUNK_SIZE);
+        tile_coord.y -= (chunk_coord.y*CHUNK_SIZE);
+        assert(chunk_coord.x < WORLD_SIZE && chunk_coord.y < WORLD_SIZE);
+        assert(tile_coord.x < CHUNK_SIZE && tile_coord.y < CHUNK_SIZE);
+        return &chunks[chunk_coord.x][chunk_coord.y].tiles[tile_coord.x][tile_coord.y];
+    }
 };
 
 
@@ -169,6 +179,8 @@ WORLD_OBJECT_TYPE determine_world_object(i32 x, i32 y, world_generation_props *g
 }
 
 
+global_variable v2i gl_beacon_pos={0,0};
+
 internal
 void generate_world(generic_map_t *mp, world_generation_props *gen_props) {
     timer_t perfCounter;
@@ -188,6 +200,7 @@ void generate_world(generic_map_t *mp, world_generation_props *gen_props) {
         for (i32 x=0;x<WORLD_SIZE*CHUNK_SIZE;x++) {
             for (i32 y=0;y<WORLD_SIZE*CHUNK_SIZE;y++) {
                 gen_props->stone_noise[x][y] = p_stone.noise(x,y);
+                gen_props->terrain_noise[x][y] = p_terrain.noise(x,y);
             }
         }
     }
@@ -220,34 +233,57 @@ void generate_world(generic_map_t *mp, world_generation_props *gen_props) {
         }
     }
 
-    /*
-    // this code FUCKING SUCKS!!!!
-    // beacon placement
-    i32 min_dist_to_edge = 3;
-    i32 max_dist_to_edge = 15;
-    i32 min_dist_to_center = 20;
-    
-    // TODO: find way to calculuate distance to edge of the map
-
-    // random spawn point
-    mt19937 beacon_spawner_engine(gen_props->seed_placement);
-    // can't spawn in the outter chunk
-    std::uniform_real_distribution<i32> distribution(CHUNK_SIZE,CHUNK_SIZE + (CHUNK_SIZE*(WORLD_SIZE-2)));
-    do {
-        i32 x = distribution(beacon_spawner_engine);
-        i32 y = distribution(beacon_spawner_engine);
-
-        // test point
-        v2i chunk(x/CHUNK_SIZE,y/CHUNK_SIZE);
-
-        TILE_TYPE tile = mp->chunks[chunk.x][chunk.y].tiles[x-(chunk.x*CHUNK_SIZE)][y-(chunk.y*CHUNK_SIZE)];
-        if (tile != TT_WATER) {
-            
+    std::mt19937 beacon_spawner_engine(gen_props->seed_placement);
+    v2i beacon_pos={0,0};
+    v2i chunk_pos={0,0};
+    while (1) {
+        // random chunk in the 2 outter layers of the map, with one layer gap for the ocean
+        bool vert = (bool)(beacon_spawner_engine() % 2);
+        // this code is pretty weird tbh
+        if (vert) {
+            chunk_pos.y = beacon_spawner_engine() % 1 + WORLD_SIZE-4;
+            chunk_pos.x = beacon_spawner_engine() % 4;
+            if (chunk_pos.x > 1)
+                chunk_pos.x += (WORLD_SIZE-1-2);
+            else
+                chunk_pos.x += 1;
+        } else {
+            chunk_pos.x = beacon_spawner_engine() % 1 + WORLD_SIZE-4;
+            chunk_pos.y = beacon_spawner_engine() % 4;
+            if (chunk_pos.y > 1)
+                chunk_pos.y += (WORLD_SIZE-1-2);
+            else
+                chunk_pos.y += 1;
         }
-    } while ();
-    */
+        world_chunk_t *chunk = &mp->chunks[chunk_pos.x][chunk_pos.y];
+        // randomly look for an open tile
+        for (i32 x=0; x<CHUNK_SIZE; x++) {
+            for (i32 y=0; y<CHUNK_SIZE; y++) {
+                if (chunk->tiles[x][y] != TT_WATER) {
+                    bool occupied=false;
+                    for (i32 ind=0; ind<chunk->world_object_count; ind++) {
+                        if (chunk->world_objects[ind].pos == v2(x*64.f,y*64.f)) {
+                            occupied=true;
+                            break;
+                        }
+                    }
+                    if (occupied) continue;
+                }
+                beacon_pos = {(chunk_pos.x*CHUNK_SIZE+x)*64,(chunk_pos.y*CHUNK_SIZE+y)*64};
+                goto success;
+            }
+        }
+success:
+        break;
+    }
+    world_object_t beacon;
+    beacon.pos = beacon_pos;
+    beacon.type = WO_BEACON;
+    mp->chunks[chunk_pos.x][chunk_pos.y].add_world_object(beacon);
+    mp->add_wall(beacon_pos);
+    std::cout << "Beacon placed at " << beacon.pos.x << " " << beacon.pos.y << std::endl;
 
     double elapsed = perfCounter.get();
     std::cout << "World generation took " << elapsed << " seconds" << std::endl;
-    
+    gl_beacon_pos = beacon.pos;    
 }

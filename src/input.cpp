@@ -12,6 +12,10 @@ struct InputState {
     bool mouse_just_middle_released = false;
     bool mouse_middle_pressed = false;
 
+    bool mouse_just_right_pressed = false;
+    bool mouse_just_right_released = false;
+    bool mouse_right_pressed = false;
+    
     i32 mouse_move_x=0;
     i32 mouse_move_y=0;
 
@@ -40,6 +44,10 @@ void PollEvents(InputState *state, bool *running) {
 
     state->mouse_just_middle_pressed = false;
     state->mouse_just_middle_released = false;
+
+    state->mouse_just_right_pressed = false;
+    state->mouse_just_right_released = false;
+
     
     state->mouse_move_x=0;
     state->mouse_move_y=0;
@@ -66,6 +74,9 @@ void PollEvents(InputState *state, bool *running) {
             } else if (e.button.button == SDL_BUTTON_MIDDLE) {
                 state->mouse_middle_pressed = true;
                 state->mouse_just_middle_pressed = true;
+            } else if (e.button.button == SDL_BUTTON_RIGHT) {
+                state->mouse_right_pressed = true;
+                state->mouse_just_right_pressed = true;
             }
         } else if (e.type == SDL_MOUSEBUTTONUP) {
             if (e.button.button == SDL_BUTTON_LEFT) {
@@ -74,6 +85,9 @@ void PollEvents(InputState *state, bool *running) {
             } else if (e.button.button == SDL_BUTTON_MIDDLE) {
                 state->mouse_middle_pressed = false;
                 state->mouse_just_middle_released = true;
+            } else if (e.button.button == SDL_BUTTON_RIGHT) {
+                state->mouse_right_pressed = false;
+                state->mouse_just_right_released = true;
             }
         // text input
         } else if (e.type == SDL_MOUSEWHEEL) {

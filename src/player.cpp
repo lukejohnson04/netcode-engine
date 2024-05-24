@@ -245,7 +245,7 @@ void update_player(character *player, double delta, i32 wall_count, v2i *walls, 
         return;
     }    
 
-    float move_speed = 300;
+    float move_speed = 1500;
     if (player->curr_state != character::TAKING_DAMAGE && player->curr_state != character::PUNCHING) {
         // movement code
         if (player->get_command_state(CMD_LEFT)) {
